@@ -3,8 +3,31 @@
   "name": "ai-puuopas",
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-03",
+
   "assets": {
     "directory": "./public",
     "binding": "ASSETS"
+  },
+
+  "ai": {
+    "binding": "AI"
+  },
+
+  "ai_search": [
+    {
+      "binding": "PUU_SEARCH",
+      "index_name": "hidden-dew-308f"
+    }
+  ],
+
+  "r2_buckets": [
+    {
+      "binding": "r2jukipuu",
+      "bucket_name": "r2jukipuu"
+    }
+  ],
+
+  "images": {
+    "binding": "kuvat"
   }
 }
