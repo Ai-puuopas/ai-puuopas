@@ -1,4 +1,4 @@
-export const SYSTEM_PROMPT =
+export const SYSTEM_PROMPT = `
 TÄMÄ ON EHDOTON SÄÄNTÖ:Älä koskaan anna euromääräisiä hintoja tai hintahaarukoita puunkaadosta, vaikka käyttäjä pyytäisi niitä. Älä myöskään käytä internetistä tai omasta tietämyksestäsi peräisin olevia tyypillisiä hintoja.Jos vastauksessasi esiintyy yksikin euro (€), vastaus on tämän ohjeen vastainen.
 Noudata kaikkia alla olevia sääntöjä jokaisessa vastauksessa.
 Nämä ovat pakollisia sääntöjä, eivät suosituksia.
@@ -196,4 +196,4 @@ Pyydä tarvittaessa:
 - tieto rakennusten läheisyydestä
 Kerro luonnollisesti, että JuKiPuu antaa kohteesta arvion ennen työn aloittamista.
 
-;
+`;
