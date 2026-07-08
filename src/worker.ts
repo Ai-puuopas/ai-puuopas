@@ -6,6 +6,7 @@ export interface Env {
   AI?: any;
   DB?: any;
   tyoskentelu?: any;
+  CF_AIG_TOKEN?: string;
 }
 
 const corsHeaders = {
@@ -14,7 +15,14 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const VERSION = "0.4.5-github-clean";
+const VERSION = "0.4.6-gpt-gateway-rag";
+
+const AI_GATEWAY_URL =
+  "https://gateway.ai.cloudflare.com/v1/c929d499c01584b02d13721d801e78ff/default/openai/chat/completions";
+
+const GPT_MODEL = "gpt-4.1";
+// Jos haluat kokeilla myöhemmin:
+// const GPT_MODEL = "gpt-4o-mini";
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
@@ -119,7 +127,7 @@ function extractAnswer(aiSearchResponse: any) {
     aiSearchResponse?.choices?.[0]?.message?.content ||
     aiSearchResponse?.result?.response ||
     aiSearchResponse?.result?.answer ||
-    "AI-puuopas sai vastauksen, mutta sitä ei voitu vielä purkaa näytettävään muotoon."
+    ""
   );
 }
 
@@ -162,6 +170,50 @@ async function readQuestion(request: Request) {
   }
 }
 
+async function askGpt(env: Env, question: string, aiSearchContext: string) {
+  if (!env.CF_AIG_TOKEN) {
+    throw new Error("CF_AIG_TOKEN puuttuu Worker Secretseistä.");
+  }
+
+  const response = await fetch(AI_GATEWAY_URL, {
+    method: "POST",
+    headers: {
+      "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: GPT_MODEL,
+      messages: [
+        {
+          role: "system",
+          content:
+            SYSTEM_PROMPT +
+            "\n\nKäytä alla olevaa AI Search -taustatietoa apuna, mutta älä väitä tietäväsi enempää kuin tiedät. Vastaa suomeksi.",
+        },
+        {
+          role: "user",
+          content:
+            `Käyttäjän kysymys:\n${question}\n\n` +
+            `AI Search -taustatieto JuKiPuun sisällöistä:\n${aiSearchContext || "Ei lisätaustaa."}`,
+        },
+      ],
+      temperature: 0.3,
+      max_tokens: 700,
+    }),
+  });
+
+  const data: any = await response.json();
+
+  if (!response.ok) {
+    throw new Error(JSON.stringify(data));
+  }
+
+  return (
+    data?.choices?.[0]?.message?.content ||
+    "GPT sai vastauksen, mutta sitä ei voitu purkaa näytettävään muotoon."
+  );
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -184,6 +236,7 @@ export default {
           assets: !!env.ASSETS,
           d1: !!env.DB,
           workflow: !!env.tyoskentelu,
+          cfAigToken: !!env.CF_AIG_TOKEN,
         },
       });
     }
@@ -210,55 +263,50 @@ export default {
           });
         }
 
-        if (!env.PUU_SEARCH) {
-          return json(
-            {
-              ok: false,
-              error: "AI Search -binding PUU_SEARCH puuttuu.",
-              version: VERSION,
-            },
-            500
-          );
+        let aiSearchContext = "";
+
+        if (env.PUU_SEARCH) {
+          try {
+            const aiSearchResponse = await env.PUU_SEARCH.chatCompletions({
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "Hae JuKiPuun sisältöihin perustuva lyhyt taustavastaus. Älä keksi tietoja.",
+                },
+                {
+                  role: "user",
+                  content: cleanQuestion,
+                },
+              ],
+            });
+
+            aiSearchContext = extractAnswer(aiSearchResponse);
+          } catch (err) {
+            console.error("PUU_SEARCH context error:", err);
+            aiSearchContext = "";
+          }
         }
 
-        let aiSearchResponse: any;
+        let rawAnswer: string;
 
         try {
-          aiSearchResponse = await env.PUU_SEARCH.chatCompletions({
-            messages: [
-              {
-                role: "system",
-                content: SYSTEM_PROMPT,
-              },
-              {
-                role: "user",
-                content: cleanQuestion,
-              },
-            ],
-          });
+          rawAnswer = await askGpt(env, cleanQuestion, aiSearchContext);
         } catch (err) {
-          console.error("PUU_SEARCH error:", err);
+          console.error("GPT Gateway error:", err);
 
-          const fallbackAnswer =
+          rawAnswer =
+            aiSearchContext ||
             "En ole täysin varma vastauksesta juuri nyt. Jos kyse on käävästä, puun vauriosta, sähkölinjoista, rakennuksen lähellä olevasta puusta tai muusta riskistä, tilanne kannattaa arvioida paikan päällä.";
-
-          return json({
-            ok: true,
-            app: "AI-puuopas",
-            version: VERSION,
-            question: cleanQuestion,
-            answer: addServiceQuestionIfNeeded(fallbackAnswer, cleanQuestion),
-            durationMs: Date.now() - started,
-          });
         }
 
-        const rawAnswer = extractAnswer(aiSearchResponse);
         const finalAnswer = addServiceQuestionIfNeeded(rawAnswer, cleanQuestion);
 
         return json({
           ok: true,
           app: "AI-puuopas",
           version: VERSION,
+          model: GPT_MODEL,
           question: cleanQuestion,
           answer: finalAnswer,
           durationMs: Date.now() - started,
@@ -269,7 +317,7 @@ export default {
         return json(
           {
             ok: false,
-            error: "AI-puuopas ei saanut AI Search -vastausta juuri nyt.",
+            error: "AI-puuopas ei saanut vastausta juuri nyt.",
             detail: String(err),
             version: VERSION,
           },
