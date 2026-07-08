@@ -20,7 +20,7 @@ const VERSION = "0.4.6-gpt-gateway-rag";
 const AI_GATEWAY_URL =
   "https://gateway.ai.cloudflare.com/v1/c929d499c01584b02d13721d801e78ff/default/openai/chat/completions";
 
-const GPT_MODEL = "gpt-4.1";
+const GPT_MODEL = "gpt-5.5";
 // Jos haluat kokeilla myöhemmin:
 // const GPT_MODEL = "gpt-4o-mini";
 
