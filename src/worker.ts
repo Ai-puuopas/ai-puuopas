@@ -2,12 +2,13 @@ import { SYSTEM_PROMPT } from "./prompt";
 
 export interface Env {
   ASSETS: Fetcher;
-  AI?: any;
+  AI: any;
   PUU_SEARCH?: any;
-  CF_AIG_TOKEN?: string;
+  r2jukipuu?: R2Bucket;
+  kuvat?: any;
 }
 
-const VERSION = "0.5.0-gpt-debug-low-tpm";
+const VERSION = "0.5.1-workers-ai-gpt55";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://jukipuu.fi",
@@ -25,24 +26,30 @@ function json(data: unknown, status = 200) {
   });
 }
 
-function text(data: string, status = 200) {
-  return new Response(data, {
-    status,
-    headers: {
-      ...corsHeaders,
-      "Content-Type": "text/plain; charset=utf-8",
-    },
-  });
-}
-
 function cleanQuestion(value: unknown): string {
   if (typeof value !== "string") return "";
   return value.trim().slice(0, 500);
 }
 
-function limitText(value: unknown, max = 900): string {
+function limitText(value: unknown, max = 700): string {
   if (typeof value !== "string") return "";
   return value.replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function extractAnswer(response: any): string {
+  if (typeof response === "string") return response.trim();
+
+  return (
+    response?.response ||
+    response?.answer ||
+    response?.output_text ||
+    response?.result?.response ||
+    response?.result?.answer ||
+    response?.result?.output_text ||
+    response?.output?.[0]?.content?.[0]?.text ||
+    response?.choices?.[0]?.message?.content ||
+    ""
+  ).trim();
 }
 
 async function getSmallRagContext(env: Env, question: string): Promise<string> {
@@ -55,7 +62,7 @@ async function getSmallRagContext(env: Env, question: string): Promise<string> {
 
     const matches = Array.isArray(result?.matches) ? result.matches : [];
 
-    const chunks = matches
+    return matches
       .slice(0, 2)
       .map((item: any, index: number) => {
         const title =
@@ -71,78 +78,49 @@ async function getSmallRagContext(env: Env, question: string): Promise<string> {
 
         return `Lähde ${index + 1}: ${limitText(title, 120)}\n${limitText(content, 700)}`;
       })
-      .filter(Boolean);
-
-    return chunks.join("\n\n");
+      .filter(Boolean)
+      .join("\n\n");
   } catch (error) {
     console.error("RAG_SEARCH_ERROR", error);
     return "";
   }
 }
 
-async function askOpenAI(env: Env, question: string, context: string): Promise<string> {
-  const token = env.CF_AIG_TOKEN;
+async function askGpt55(env: Env, question: string, context: string): Promise<string> {
+  const userPrompt =
+    `Kysymys:\n${question}\n\n` +
+    `Hakukonteksti:\n${context || "Ei hakukontekstia."}`;
 
-  if (!token) {
-    throw new Error("Missing CF_AIG_TOKEN");
-  }
-
-  const model = "gpt-4.1-mini";
-
-  const input = [
-    {
-      role: "system",
-      content:
-        SYSTEM_PROMPT +
-        "\n\nVastaa tiiviisti suomeksi. Älä keksi tietoja. Jos tieto puuttuu, sano se selvästi.",
-    },
-    {
-      role: "user",
-      content:
-        `Kysymys:\n${question}\n\n` +
-        `Mahdollinen hakukonteksti:\n${context || "Ei hakukontekstia."}`,
-    },
-  ];
-
-  console.log("GPT_MODEL", model);
+  console.log("GPT_MODEL", "openai/gpt-5.5-pro");
   console.log("QUESTION_LENGTH", question.length);
   console.log("CONTEXT_LENGTH", context.length);
   console.log("SYSTEM_PROMPT_LENGTH", SYSTEM_PROMPT.length);
 
-  const response = await fetch("https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/YOUR_GATEWAY_NAME/openai/responses", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      input,
-      max_output_tokens: 500,
-    }),
+  const response = await env.AI.run("openai/gpt-5.5-pro", {
+    messages: [
+      {
+        role: "system",
+        content:
+          SYSTEM_PROMPT +
+          "\n\nVastaa aina suomeksi. Vastaa tiiviisti. Älä keksi tietoja.",
+      },
+      {
+        role: "user",
+        content: userPrompt,
+      },
+    ],
+    max_tokens: 500,
   });
 
-  const raw = await response.text();
+  console.log("AI_RAW_RESPONSE", JSON.stringify(response).slice(0, 2000));
 
-  console.log("OPENAI_STATUS", response.status);
-  console.log("OPENAI_RAW", raw.slice(0, 2000));
-
-  if (!response.ok) {
-    throw new Error(`OpenAI error ${response.status}: ${raw.slice(0, 1000)}`);
-  }
-
-  const data: any = JSON.parse(raw);
-
-  const answer =
-    data?.output_text ||
-    data?.output?.[0]?.content?.[0]?.text ||
-    "";
+  const answer = extractAnswer(response);
 
   if (!answer) {
-    throw new Error("OpenAI returned empty answer");
+    throw new Error("Workers AI returned empty answer");
   }
 
-  return answer.trim();
+  return answer;
 }
 
 export default {
@@ -165,7 +143,8 @@ export default {
           assets: !!env.ASSETS,
           workersAI: !!env.AI,
           aiSearch: !!env.PUU_SEARCH,
-          cfAigToken: !!env.CF_AIG_TOKEN,
+          r2: !!env.r2jukipuu,
+          images: !!env.kuvat,
         },
       });
     }
@@ -179,14 +158,15 @@ export default {
           return json(
             {
               ok: false,
-              error: "Kysymys puuttuu.",
+              answer: "Kysymys puuttuu.",
+              version: VERSION,
             },
             400,
           );
         }
 
         const context = await getSmallRagContext(env, question);
-        const answer = await askOpenAI(env, question, context);
+        const answer = await askGpt55(env, question, context);
 
         return json({
           ok: true,
