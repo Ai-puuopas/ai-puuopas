@@ -1,12 +1,14 @@
 import { SYSTEM_PROMPT } from "./prompt.js";
 
 export interface Env {
-  ASSETS: Fetcher;
+  ASSETS?: Fetcher;
   PUU_SEARCH?: any;
   AI?: any;
   DB?: any;
   tyoskentelu?: any;
   CF_AIG_TOKEN?: string;
+  r2jukipuu?: any;
+  kuvat?: any;
 }
 
 const corsHeaders = {
@@ -15,14 +17,12 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const VERSION = "0.4.6-gpt-gateway-rag";
+const VERSION = "0.4.7-gpt-gateway-rag-buildfix";
 
 const AI_GATEWAY_URL =
   "https://gateway.ai.cloudflare.com/v1/c929d499c01584b02d13721d801e78ff/default/openai/chat/completions";
 
 const GPT_MODEL = "gpt-5.5";
-// Jos haluat kokeilla myöhemmin:
-// const GPT_MODEL = "gpt-4o-mini";
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
@@ -120,17 +120,6 @@ function shouldAvoidJuKiPuuService(question: string) {
   return avoidWords.some((word) => q.includes(word));
 }
 
-function extractAnswer(aiSearchResponse: any) {
-  return (
-    aiSearchResponse?.response ||
-    aiSearchResponse?.answer ||
-    aiSearchResponse?.choices?.[0]?.message?.content ||
-    aiSearchResponse?.result?.response ||
-    aiSearchResponse?.result?.answer ||
-    ""
-  );
-}
-
 function addServiceQuestionIfNeeded(answer: string, question: string) {
   let finalAnswer = String(answer || "");
 
@@ -162,10 +151,49 @@ async function readQuestion(request: Request) {
     return String(formData.get("question") || "").trim();
   }
 
+  return "";
+}
+
+function extractSearchChunks(searchResults: any) {
+  const chunks =
+    searchResults?.chunks ||
+    searchResults?.result?.chunks ||
+    searchResults?.data ||
+    [];
+
+  if (!Array.isArray(chunks)) return [];
+
+  return chunks;
+}
+
+async function getAiSearchContext(env: Env, question: string) {
+  if (!env.PUU_SEARCH) return "";
+
   try {
-    const body: any = await request.json();
-    return String(body?.question || "").trim();
-  } catch {
+    const searchResults = await env.PUU_SEARCH.search({
+      query: question,
+      ai_search_options: {
+        retrieval: {
+          retrieval_type: "hybrid",
+          max_num_results: 6,
+          match_threshold: 0.35,
+          context_expansion: 1,
+        },
+      },
+    });
+
+    const chunks = extractSearchChunks(searchResults);
+
+    return chunks
+      .map((c: any, i: number) => {
+        const text = c.text || c.content || c.markdown || "";
+        const source = c.source || c.filename || c.url || c.title || "AI Search";
+        return `Lähde ${i + 1}: ${source}\n${text}`;
+      })
+      .filter((x: string) => x.trim().length > 0)
+      .join("\n\n---\n\n");
+  } catch (err) {
+    console.error("PUU_SEARCH search error:", err);
     return "";
   }
 }
@@ -188,7 +216,7 @@ async function askGpt(env: Env, question: string, aiSearchContext: string) {
           role: "system",
           content:
             SYSTEM_PROMPT +
-            "\n\nKäytä alla olevaa AI Search -taustatietoa apuna, mutta älä väitä tietäväsi enempää kuin tiedät. Vastaa suomeksi.",
+            "\n\nKäytä AI Search -taustatietoa apuna. Älä keksi tietoja. Vastaa aina suomeksi.",
         },
         {
           role: "user",
@@ -202,7 +230,14 @@ async function askGpt(env: Env, question: string, aiSearchContext: string) {
     }),
   });
 
-  const data: any = await response.json();
+  const text = await response.text();
+
+  let data: any = {};
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { raw: text };
+  }
 
   if (!response.ok) {
     throw new Error(JSON.stringify(data));
@@ -231,9 +266,11 @@ export default {
         app: "AI-puuopas",
         version: VERSION,
         bindings: {
+          assets: !!env.ASSETS,
           workersAI: !!env.AI,
           aiSearch: !!env.PUU_SEARCH,
-          assets: !!env.ASSETS,
+          r2: !!env.r2jukipuu,
+          images: !!env.kuvat,
           d1: !!env.DB,
           workflow: !!env.tyoskentelu,
           cfAigToken: !!env.CF_AIG_TOKEN,
@@ -263,62 +300,48 @@ export default {
           });
         }
 
-let aiSearchContext = "";
+        const aiSearchContext = await getAiSearchContext(env, cleanQuestion);
 
-if (env.PUU_SEARCH) {
-  try {
-    const searchResults = await env.PUU_SEARCH.search({
-      query: cleanQuestion,
-      ai_search_options: {
-        retrieval: {
-          retrieval_type: "hybrid",
-          max_num_results: 6,
-          match_threshold: 0.35,
-          context_expansion: 1
+        let rawAnswer: string;
+
+        try {
+          rawAnswer = await askGpt(env, cleanQuestion, aiSearchContext);
+        } catch (err) {
+          console.error("GPT Gateway error:", err);
+
+          rawAnswer =
+            "Löysin JuKiPuun aineistoa, mutta vastauksen muodostaminen GPT:n kautta epäonnistui juuri nyt. Kokeile hetken päästä uudelleen.";
         }
+
+        const finalAnswer = addServiceQuestionIfNeeded(rawAnswer, cleanQuestion);
+
+        return json({
+          ok: true,
+          app: "AI-puuopas",
+          version: VERSION,
+          model: GPT_MODEL,
+          question: cleanQuestion,
+          answer: finalAnswer,
+          usedAiSearch: aiSearchContext.length > 0,
+          durationMs: Date.now() - started,
+        });
+      } catch (err: any) {
+        console.error("ASK endpoint error:", err);
+
+        return json({
+          ok: false,
+          app: "AI-puuopas",
+          version: VERSION,
+          error: String(err?.message || err),
+          durationMs: Date.now() - started,
+        }, 500);
       }
-    });
-
-    const chunks = searchResults?.chunks ?? [];
-
-    aiSearchContext = chunks
-      .map((c: any, i: number) => {
-        const text = c.text || c.content || "";
-        const source = c.source || c.filename || c.url || "AI Search";
-        return `Lähde ${i + 1}: ${source}\n${text}`;
-      })
-        .join("\n\n---\n\n");
-  } catch (err) {
-    console.error("PUU_SEARCH search error:", err);
-    aiSearchContext = "";
-  }
-}
-
-let rawAnswer: string;
-
-try {
-  rawAnswer = await askGpt(env, cleanQuestion, aiSearchContext);
-} catch (err) {
-  console.error("GPT Gateway error:", err);
-
-  rawAnswer =
-    "Löysin JuKiPuun aineistoa, mutta vastauksen muodostaminen GPT:n kautta epäonnistui juuri nyt. Kokeile hetken päästä uudelleen.";
-}
-
-const finalAnswer = addServiceQuestionIfNeeded(rawAnswer, cleanQuestion);
-
-return json({
-  ok: true,
-  app: "AI-puuopas",
-  version: VERSION,
-  model: GPT_MODEL,
-  question: cleanQuestion,
-  answer: finalAnswer,
-  durationMs: Date.now() - started,
-});
-
     }
 
-    return env.ASSETS.fetch(request);
+    if (env.ASSETS) {
+      return env.ASSETS.fetch(request);
+    }
+
+    return new Response("Not found", { status: 404 });
   },
 };
