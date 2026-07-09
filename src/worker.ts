@@ -174,7 +174,7 @@ try {
     answer,
     version: VERSION,
   });
-} catch (error: any) {
+} catch (err: any) {
   console.error("ASK_FATAL_ERROR", error?.message || error);
   console.error("ASK_FATAL_STACK", error?.stack || "");
 
