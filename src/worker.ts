@@ -302,6 +302,46 @@ export default {
 
         const aiSearchContext = await getAiSearchContext(env, cleanQuestion);
 
+        let rawAnswer = "";
+
+        try {
+          rawAnswer = await askGpt(env, cleanQuestion, aiSearchContext);
+        } catch (err) {
+          console.error("GPT Gateway error:", err);
+
+          rawAnswer =
+            "Löysin JuKiPuun aineistoa, mutta vastauksen muodostaminen GPT:n kautta epäonnistui juuri nyt. Kokeile hetken päästä uudelleen.";
+        }
+
+        const finalAnswer = addServiceQuestionIfNeeded(rawAnswer, cleanQuestion);
+
+        return json({
+          ok: true,
+          app: "AI-puuopas",
+          version: VERSION,
+          model: GPT_MODEL,
+          question: cleanQuestion,
+          answer: finalAnswer,
+          usedAiSearch: aiSearchContext.length > 0,
+          durationMs: Date.now() - started,
+        });
+      } catch (err: any) {
+        console.error("ASK endpoint error:", err);
+
+        return json(
+          {
+            ok: false,
+            app: "AI-puuopas",
+            version: VERSION,
+            error: String(err?.message || err),
+            durationMs: Date.now() - started,
+          },
+          500
+        );
+      }
+    }
+        const aiSearchContext = await getAiSearchContext(env, cleanQuestion);
+
         let rawAnswer: string;
 
         try {
