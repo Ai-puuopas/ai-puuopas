@@ -17,7 +17,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const VERSION = "0.4.7-gpt-gateway-rag-buildfix";
+const VERSION = "0.4.8-gpt-gateway-rag-buildfix";
 
 const AI_GATEWAY_URL =
   "https://gateway.ai.cloudflare.com/v1/c929d499c01584b02d13721d801e78ff/default/openai/chat/completions";
