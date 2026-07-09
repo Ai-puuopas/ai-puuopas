@@ -278,12 +278,14 @@ export default {
 
         try {
           answer = await askGpt(env, question, context);
-        } catch (err) {
-          console.error("GPT Gateway error:", err);
-          answer =
-             "GPT ERROR:\n\n" + msg;
-        }
+} catch (err) {
+  console.error("GPT Gateway error:", err);
 
+  const msg = err instanceof Error ? err.message : String(err);
+
+  answer =
+    "GPT ERROR:\n\n" + msg;
+}
         return json({
           ok: true,
           app: "AI-puuopas",
