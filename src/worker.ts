@@ -263,31 +263,36 @@ export default {
           });
         }
 
-        let aiSearchContext = "";
+let aiSearchContext = "";
 
-        if (env.PUU_SEARCH) {
-          try {
-            const aiSearchResponse = await env.PUU_SEARCH.chatCompletions({
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    "Hae JuKiPuun sisältöihin perustuva lyhyt taustavastaus. Älä keksi tietoja.",
-                },
-                {
-                  role: "user",
-                  content: cleanQuestion,
-                },
-              ],
-            });
-
-            aiSearchContext = extractAnswer(aiSearchResponse);
-          } catch (err) {
-            console.error("PUU_SEARCH context error:", err);
-            aiSearchContext = "";
-          }
+if (env.PUU_SEARCH) {
+  try {
+    const searchResults = await env.PUU_SEARCH.search({
+      query: cleanQuestion,
+      ai_search_options: {
+        retrieval: {
+          retrieval_type: "hybrid",
+          max_num_results: 6,
+          match_threshold: 0.35,
+          context_expansion: 1
         }
+      }
+    });
 
+    const chunks = searchResults?.chunks ?? [];
+
+    aiSearchContext = chunks
+      .map((c: any, i: number) => {
+        const text = c.text || c.content || "";
+        const source = c.source || c.filename || c.url || "AI Search";
+        return `Lähde ${i + 1}: ${source}\n${text}`;
+      })
+      .join("\n\n---\n\n");
+  } catch (err) {
+    console.error("PUU_SEARCH search error:", err);
+    aiSearchContext = "";
+  }
+}
         let rawAnswer: string;
 
         try {
