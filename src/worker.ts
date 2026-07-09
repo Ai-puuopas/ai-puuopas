@@ -300,11 +300,8 @@ if (env.PUU_SEARCH) {
         } catch (err) {
           console.error("GPT Gateway error:", err);
 
-          rawAnswer =
-            aiSearchContext ||
-            "En ole täysin varma vastauksesta juuri nyt. Jos kyse on käävästä, puun vauriosta, sähkölinjoista, rakennuksen lähellä olevasta puusta tai muusta riskistä, tilanne kannattaa arvioida paikan päällä.";
-        }
-
+rawAnswer =
+  "Löysin JuKiPuun aineistoa, mutta vastauksen muodostaminen GPT:n kautta epäonnistui juuri nyt. Kokeile hetken päästä uudelleen.";
         const finalAnswer = addServiceQuestionIfNeeded(rawAnswer, cleanQuestion);
 
         return json({
