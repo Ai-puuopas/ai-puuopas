@@ -1,24 +1,13 @@
-import { SYSTEM_PROMPT } from "./prompt.js";
+import { SYSTEM_PROMPT } from "./prompt";
 
 export interface Env {
-  ASSETS?: Fetcher;
-  PUU_SEARCH?: any;
+  ASSETS: Fetcher;
   AI?: any;
-  DB?: any;
-  tyoskentelu?: any;
+  PUU_SEARCH?: any;
   CF_AIG_TOKEN?: string;
-  r2jukipuu?: any;
-  kuvat?: any;
 }
 
-const VERSION = "0.4.9.4-gpt-rag-token-limit";
-const GPT_MODEL = "gpt-5.5";
-
-const AI_GATEWAY_URL =
-  "https://gateway.ai.cloudflare.com/v1/c929d499c01584b02d13721d801e78ff/default/openai/chat/completions";
-
-const MAX_CONTEXT_CHARS_PER_CHUNK = 800;
-const MAX_TOTAL_CONTEXT_CHARS = 2600;
+const VERSION = "0.5.0-gpt-debug-low-tpm";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://jukipuu.fi",
@@ -26,7 +15,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-function json(data: unknown, status = 200): Response {
+function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
@@ -36,209 +25,124 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function normalize(value: unknown): string {
-  return String(value || "").toLowerCase().trim();
+function text(data: string, status = 200) {
+  return new Response(data, {
+    status,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/plain; charset=utf-8",
+    },
+  });
 }
 
-function isPlantQuestion(question: string): boolean {
-  const q = normalize(question);
-
-  const words = [
-    "puu", "puun", "puut", "puunkaato", "kaato", "kaataa",
-    "arboristi", "kaatokiipeily", "kiipeilykaato",
-    "oksa", "latvus", "runko", "juuri", "juurenniska",
-    "vesiverso", "juurivesa",
-    "kasvi", "pensas", "pensasaita", "tuija", "kuusiaita",
-    "omenapuu", "koivu", "mänty", "kuusi", "tammi",
-    "vaahtera", "pihlaja", "raita", "kastanja",
-    "leikkaus", "hoitoleikkaus", "hoito",
-    "laho", "lahovika", "kääpä", "käävät", "sieni",
-    "repeämä", "kallistunut", "vinossa",
-    "sähkölinja", "puutarha", "piha", "pihapuu",
-    "istutus", "multa", "lannoitus",
-  ];
-
-  return words.some((word) => q.includes(word));
+function cleanQuestion(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, 500);
 }
 
-function shouldAskService(question: string): boolean {
-  const q = normalize(question);
-
-  const serviceWords = [
-    "puunkaato", "kaato", "kaataa", "kaadetaan",
-    "kaatokiipeily", "kiipeilykaato",
-    "vaarallinen", "talon lähellä", "rakennuksen lähellä",
-    "sähkölinja", "iso oksa", "suuri oksa",
-    "hoitoleikkaus", "kunnon arviointi", "puun kunto",
-    "kääpä", "käävät", "laho", "lahovika",
-    "repeämä", "kallistunut", "vinossa",
-    "hinta", "mitä maksaa", "paljon maksaa", "tarjous",
-  ];
-
-  const avoidWords = [
-    "juurenniska",
-    "vesiverso",
-    "istutus",
-    "multa",
-    "lannoitus",
-  ];
-
-  return (
-    serviceWords.some((word) => q.includes(word)) &&
-    !avoidWords.some((word) => q.includes(word))
-  );
+function limitText(value: unknown, max = 900): string {
+  if (typeof value !== "string") return "";
+  return value.replace(/\s+/g, " ").trim().slice(0, max);
 }
 
-function addServiceQuestion(answer: string, question: string): string {
-  if (!shouldAskService(question)) return answer;
-  if (answer.includes("Voisiko JuKiPuu auttaa")) return answer;
-
-  return (
-    answer +
-    "\n\nVoisiko JuKiPuu auttaa tilanteen arvioinnissa paikan päällä?"
-  );
-}
-
-async function readQuestion(request: Request): Promise<string> {
-  const contentType = request.headers.get("content-type") || "";
-
-  if (contentType.includes("application/json")) {
-    const body = (await request.json()) as { question?: unknown };
-    return String(body.question || "").trim();
-  }
-
-  if (
-    contentType.includes("application/x-www-form-urlencoded") ||
-    contentType.includes("multipart/form-data")
-  ) {
-    const formData = await request.formData();
-    return String(formData.get("question") || "").trim();
-  }
-
-  return "";
-}
-
-function extractChunks(result: any): any[] {
-  const chunks =
-    result?.chunks ||
-    result?.result?.chunks ||
-    result?.data ||
-    result?.result?.data ||
-    [];
-
-  return Array.isArray(chunks) ? chunks : [];
-}
-
-function trimContext(context: string): string {
-  if (context.length <= MAX_TOTAL_CONTEXT_CHARS) return context;
-  return context.slice(0, MAX_TOTAL_CONTEXT_CHARS);
-}
-
-async function getAiSearchContext(env: Env, question: string): Promise<string> {
+async function getSmallRagContext(env: Env, question: string): Promise<string> {
   if (!env.PUU_SEARCH) return "";
 
   try {
-    const result = await env.PUU_SEARCH.search({
-      query: question,
-      ai_search_options: {
-        retrieval: {
-          retrieval_type: "hybrid",
-          max_num_results: 3,
-          match_threshold: 0.35,
-          context_expansion: 0,
-        },
-      },
+    const result = await env.PUU_SEARCH.search(question, {
+      topK: 2,
     });
 
-    const chunks = extractChunks(result);
+    const matches = Array.isArray(result?.matches) ? result.matches : [];
 
-    const context = chunks
-      .map((chunk: any, index: number) => {
-        const rawText =
-          chunk.text ||
-          chunk.content ||
-          chunk.markdown ||
+    const chunks = matches
+      .slice(0, 2)
+      .map((item: any, index: number) => {
+        const title =
+          item?.metadata?.title ||
+          item?.metadata?.source ||
+          `Hakutulos ${index + 1}`;
+
+        const content =
+          item?.metadata?.text ||
+          item?.metadata?.content ||
+          item?.text ||
           "";
 
-        const text = String(rawText)
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, MAX_CONTEXT_CHARS_PER_CHUNK);
-
-        const source =
-          chunk.source ||
-          chunk.filename ||
-          chunk.url ||
-          chunk.title ||
-          "AI Search";
-
-        if (!text) return "";
-
-        return `Lähde ${index + 1}: ${source}\n${text}`;
+        return `Lähde ${index + 1}: ${limitText(title, 120)}\n${limitText(content, 700)}`;
       })
-      .filter((item: string) => item.trim().length > 0)
-      .join("\n\n---\n\n");
+      .filter(Boolean);
 
-    return trimContext(context);
-  } catch (err) {
-    console.error("AI Search error:", err);
+    return chunks.join("\n\n");
+  } catch (error) {
+    console.error("RAG_SEARCH_ERROR", error);
     return "";
   }
 }
 
-async function askGpt(
-  env: Env,
-  question: string,
-  context: string,
-): Promise<string> {
-  if (!env.CF_AIG_TOKEN) {
-    throw new Error("CF_AIG_TOKEN puuttuu.");
+async function askOpenAI(env: Env, question: string, context: string): Promise<string> {
+  const token = env.CF_AIG_TOKEN;
+
+  if (!token) {
+    throw new Error("Missing CF_AIG_TOKEN");
   }
 
-  const response = await fetch(AI_GATEWAY_URL, {
+  const model = "gpt-4.1-mini";
+
+  const input = [
+    {
+      role: "system",
+      content:
+        SYSTEM_PROMPT +
+        "\n\nVastaa tiiviisti suomeksi. Älä keksi tietoja. Jos tieto puuttuu, sano se selvästi.",
+    },
+    {
+      role: "user",
+      content:
+        `Kysymys:\n${question}\n\n` +
+        `Mahdollinen hakukonteksti:\n${context || "Ei hakukontekstia."}`,
+    },
+  ];
+
+  console.log("GPT_MODEL", model);
+  console.log("QUESTION_LENGTH", question.length);
+  console.log("CONTEXT_LENGTH", context.length);
+  console.log("SYSTEM_PROMPT_LENGTH", SYSTEM_PROMPT.length);
+
+  const response = await fetch("https://gateway.ai.cloudflare.com/v1/YOUR_ACCOUNT_ID/YOUR_GATEWAY_NAME/openai/responses", {
     method: "POST",
     headers: {
-      "cf-aig-authorization": `Bearer ${env.CF_AIG_TOKEN}`,
+      "Authorization": `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: GPT_MODEL,
-      messages: [
-        {
-          role: "system",
-          content:
-            SYSTEM_PROMPT +
-            "\n\nKäytä AI Search -taustatietoa vain tukena. Vastaa ytimekkäästi. Älä kopioi lähdetekstiä pitkästi. Älä keksi tietoja. Vastaa aina suomeksi.",
-        },
-        {
-          role: "user",
-          content:
-            `Käyttäjän kysymys:\n${question}\n\n` +
-            `Lyhyt AI Search -taustatieto JuKiPuun aineistosta:\n${context || "Ei lisätaustaa."}`,
-        },
-      ],
-      temperature: 0.3,
-      max_tokens: 450,
+      model,
+      input,
+      max_output_tokens: 500,
     }),
   });
 
-  const text = await response.text();
+  const raw = await response.text();
 
-  let data: any;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    data = { raw: text };
-  }
+  console.log("OPENAI_STATUS", response.status);
+  console.log("OPENAI_RAW", raw.slice(0, 2000));
 
   if (!response.ok) {
-    throw new Error(JSON.stringify(data));
+    throw new Error(`OpenAI error ${response.status}: ${raw.slice(0, 1000)}`);
   }
 
-  return (
-    data?.choices?.[0]?.message?.content ||
-    "GPT vastasi, mutta vastausta ei voitu purkaa."
-  );
+  const data: any = JSON.parse(raw);
+
+  const answer =
+    data?.output_text ||
+    data?.output?.[0]?.content?.[0]?.text ||
+    "";
+
+  if (!answer) {
+    throw new Error("OpenAI returned empty answer");
+  }
+
+  return answer.trim();
 }
 
 export default {
@@ -261,90 +165,50 @@ export default {
           assets: !!env.ASSETS,
           workersAI: !!env.AI,
           aiSearch: !!env.PUU_SEARCH,
-          r2: !!env.r2jukipuu,
-          images: !!env.kuvat,
-          d1: !!env.DB,
-          workflow: !!env.tyoskentelu,
           cfAigToken: !!env.CF_AIG_TOKEN,
         },
       });
     }
 
     if (url.pathname === "/api/ask" && request.method === "POST") {
-      const started = Date.now();
-
       try {
-        const question = await readQuestion(request);
+        const body: any = await request.json().catch(() => ({}));
+        const question = cleanQuestion(body?.question || body?.q || body?.message);
 
         if (!question) {
           return json(
             {
               ok: false,
-              error: "Kysymys puuttuu tai on tyhjä.",
+              error: "Kysymys puuttuu.",
             },
             400,
           );
         }
 
-        if (!isPlantQuestion(question)) {
-          return json({
-            ok: true,
-            app: "AI-puuopas",
-            version: VERSION,
-            question,
-            answer:
-              "🌳 Olen JuKiPuun AI-puuopas. Vastaan vain kasvikuntaan, puihin, pensaisiin, kasvien hoitoon, puunkaatoon ja arboristin työhön liittyviin kysymyksiin.",
-            durationMs: Date.now() - started,
-          });
-        }
-
-        const context = await getAiSearchContext(env, question);
-
-        let answer: string;
-
-        try {
-          answer = await askGpt(env, question, context);
-        } catch (err) {
-          console.error("GPT Gateway error:", err);
-
-          answer =
-            "AI-palvelu ei saanut muodostettua vastausta juuri nyt. Kokeile hetken kuluttua uudelleen.";
-        }
+        const context = await getSmallRagContext(env, question);
+        const answer = await askOpenAI(env, question, context);
 
         return json({
           ok: true,
-          app: "AI-puuopas",
+          answer,
           version: VERSION,
-          model: GPT_MODEL,
-          question,
-          answer: addServiceQuestion(answer, question),
-          usedAiSearch: context.length > 0,
-          contextChars: context.length,
-          durationMs: Date.now() - started,
         });
-      } catch (err) {
-        console.error("Ask endpoint error:", err);
+      } catch (error: any) {
+        console.error("ASK_FATAL_ERROR", error?.message || error);
+        console.error("ASK_FATAL_STACK", error?.stack || "");
 
         return json(
           {
             ok: false,
-            app: "AI-puuopas",
+            answer:
+              "AI-palvelu ei saanut muodostettua vastausta juuri nyt. Kokeile hetken kuluttua uudelleen.",
             version: VERSION,
-            error: err instanceof Error ? err.message : String(err),
-            durationMs: Date.now() - started,
           },
-          500,
+          200,
         );
       }
     }
 
-    if (env.ASSETS) {
-      return env.ASSETS.fetch(request);
-    }
-
-    return new Response("Not found", {
-      status: 404,
-      headers: corsHeaders,
-    });
+    return env.ASSETS.fetch(request);
   },
 };
