@@ -11,12 +11,11 @@ export interface Env {
   kuvat?: any;
 }
 
-const VERSION = "0.4.9.2-gpt-gateway-rag-buildfix";
+const VERSION = "0.4.9.3-clean-build";
+const GPT_MODEL = "gpt-5.5";
 
 const AI_GATEWAY_URL =
   "https://gateway.ai.cloudflare.com/v1/c929d499c01584b02d13721d801e78ff/default/openai/chat/completions";
-
-const GPT_MODEL = "gpt-5.5";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://jukipuu.fi",
@@ -34,105 +33,67 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
-function normalize(text: unknown): string {
-  return String(text || "").toLowerCase().trim();
+function normalize(value: unknown): string {
+  return String(value || "").toLowerCase().trim();
 }
 
 function isPlantQuestion(question: string): boolean {
   const q = normalize(question);
 
-  const allowedWords = [
-    "puu", "puut", "puun", "puita",
-    "puunkaato", "puunkaadon", "puunkaatoa", "puunkaadosta",
-    "kaato", "kaataa", "kaadetaan",
-    "arboristi", "arboristin",
-    "kaatokiipeily", "kiipeilykaato",
-    "oksa", "oksat", "oksan", "oksia",
-    "latvus", "latvuksen",
-    "runko", "rungon",
-    "juuri", "juuret", "juuristo", "juurenniska",
-    "vesiverso", "vesiversot",
-    "juurivesa", "juurivesat",
-    "kasvi", "kasvit", "kasvin", "kasvikunta",
-    "pensas", "pensaat", "pensasaita", "pensasaitaa",
-    "tuija", "tuijat",
-    "kuusiaita", "aita",
-    "kukka", "kukat",
-    "nurmikko", "köynnös",
-    "omenapuu", "omenapuun",
-    "koivu", "koivun",
-    "mänty", "männyn",
-    "kuusi", "kuusen",
-    "tammi", "tammen",
-    "vaahtera", "vaahteran",
-    "pihlaja", "pihlajan",
-    "raita", "raidan",
-    "kastanja", "hevoskastanja", "hevoskastanjan",
-    "leikkaus", "leikata", "hoitoleikkaus",
-    "hoito", "hoitaa",
-    "lahovika", "laho", "lahonnut",
-    "kääpä", "käävät", "sieni", "tauti",
-    "repeämä", "repeytynyt",
-    "kallistunut", "vinossa",
-    "sähkölinja", "sähkölinjat",
-    "puutarha", "piha", "pihapuu", "pihapuun",
-    "istutus", "istuttaa", "multa", "lannoitus",
+  const words = [
+    "puu", "puun", "puut", "puunkaato", "kaato", "kaataa",
+    "arboristi", "kaatokiipeily", "kiipeilykaato",
+    "oksa", "latvus", "runko", "juuri", "juurenniska",
+    "vesiverso", "juurivesa",
+    "kasvi", "pensas", "pensasaita", "tuija", "kuusiaita",
+    "omenapuu", "koivu", "mänty", "kuusi", "tammi",
+    "vaahtera", "pihlaja", "raita", "kastanja",
+    "leikkaus", "hoitoleikkaus", "hoito",
+    "laho", "lahovika", "kääpä", "käävät", "sieni",
+    "repeämä", "kallistunut", "vinossa",
+    "sähkölinja", "puutarha", "piha", "pihapuu",
+    "istutus", "multa", "lannoitus",
   ];
 
-  return allowedWords.some((word) => q.includes(word));
+  return words.some((word) => q.includes(word));
 }
 
-function shouldAskJuKiPuuService(question: string): boolean {
+function shouldAskService(question: string): boolean {
   const q = normalize(question);
 
-  const serviceIntentWords = [
-    "puunkaato", "puunkaadon", "puunkaatoa",
-    "kaato", "kaataa", "kaadetaan",
+  const serviceWords = [
+    "puunkaato", "kaato", "kaataa", "kaadetaan",
     "kaatokiipeily", "kiipeilykaato",
-    "vaarallinen", "vaarallisen",
-    "rakennuksen lähellä", "talon lähellä",
-    "sähkölinja", "sähkölinjat",
-    "suuri oksa", "iso oksa",
-    "hoitoleikkaus", "hoitoleikkausta",
-    "pienentää", "pienennys",
-    "kunnon arviointi", "puun kunto",
-    "kääpä", "käävät",
-    "lahovika", "laho", "lahonnut",
-    "repeämä", "repeytynyt",
-    "kallistunut", "vinossa",
-    "mitä maksaa", "hinta", "paljon maksaa", "tarjous",
+    "vaarallinen", "talon lähellä", "rakennuksen lähellä",
+    "sähkölinja", "iso oksa", "suuri oksa",
+    "hoitoleikkaus", "kunnon arviointi", "puun kunto",
+    "kääpä", "käävät", "laho", "lahovika",
+    "repeämä", "kallistunut", "vinossa",
+    "hinta", "mitä maksaa", "paljon maksaa", "tarjous",
   ];
-
-  return serviceIntentWords.some((word) => q.includes(word));
-}
-
-function shouldAvoidJuKiPuuService(question: string): boolean {
-  const q = normalize(question);
 
   const avoidWords = [
     "juurenniska",
-    "vesiverso", "vesiversot",
-    "istutus", "istuttaa",
+    "vesiverso",
+    "istutus",
     "multa",
     "lannoitus",
   ];
 
-  return avoidWords.some((word) => q.includes(word));
+  return (
+    serviceWords.some((word) => q.includes(word)) &&
+    !avoidWords.some((word) => q.includes(word))
+  );
 }
 
-function addServiceQuestionIfNeeded(answer: string, question: string): string {
-  let finalAnswer = String(answer || "");
+function addServiceQuestion(answer: string, question: string): string {
+  if (!shouldAskService(question)) return answer;
+  if (answer.includes("Voisiko JuKiPuu auttaa")) return answer;
 
-  const askService =
-    shouldAskJuKiPuuService(question) &&
-    !shouldAvoidJuKiPuuService(question);
-
-  if (askService && !finalAnswer.includes("Voisiko JuKiPuu auttaa")) {
-    finalAnswer +=
-      "\n\nVoisiko JuKiPuu auttaa tilanteen arvioinnissa paikan päällä?";
-  }
-
-  return finalAnswer;
+  return (
+    answer +
+    "\n\nVoisiko JuKiPuu auttaa tilanteen arvioinnissa paikan päällä?"
+  );
 }
 
 async function readQuestion(request: Request): Promise<string> {
@@ -140,7 +101,7 @@ async function readQuestion(request: Request): Promise<string> {
 
   if (contentType.includes("application/json")) {
     const body = (await request.json()) as { question?: unknown };
-    return String(body?.question || "").trim();
+    return String(body.question || "").trim();
   }
 
   if (
@@ -154,12 +115,12 @@ async function readQuestion(request: Request): Promise<string> {
   return "";
 }
 
-function extractSearchChunks(searchResults: any): any[] {
+function extractChunks(result: any): any[] {
   const chunks =
-    searchResults?.chunks ||
-    searchResults?.result?.chunks ||
-    searchResults?.data ||
-    searchResults?.result?.data ||
+    result?.chunks ||
+    result?.result?.chunks ||
+    result?.data ||
+    result?.result?.data ||
     [];
 
   return Array.isArray(chunks) ? chunks : [];
@@ -169,7 +130,7 @@ async function getAiSearchContext(env: Env, question: string): Promise<string> {
   if (!env.PUU_SEARCH) return "";
 
   try {
-    const searchResults = await env.PUU_SEARCH.search({
+    const result = await env.PUU_SEARCH.search({
       query: question,
       ai_search_options: {
         retrieval: {
@@ -181,20 +142,20 @@ async function getAiSearchContext(env: Env, question: string): Promise<string> {
       },
     });
 
-    const chunks = extractSearchChunks(searchResults);
+    const chunks = extractChunks(result);
 
     return chunks
-      .map((c: any, i: number) => {
-        const text = c.text || c.content || c.markdown || "";
+      .map((chunk: any, index: number) => {
+        const text = chunk.text || chunk.content || chunk.markdown || "";
         const source =
-          c.source || c.filename || c.url || c.title || "AI Search";
+          chunk.source || chunk.filename || chunk.url || chunk.title || "AI Search";
 
-        return `Lähde ${i + 1}: ${source}\n${text}`;
+        return `Lähde ${index + 1}: ${source}\n${text}`;
       })
-      .filter((x: string) => x.trim().length > 0)
+      .filter((item: string) => item.trim().length > 0)
       .join("\n\n---\n\n");
   } catch (err) {
-    console.error("PUU_SEARCH search error:", err);
+    console.error("AI Search error:", err);
     return "";
   }
 }
@@ -202,10 +163,10 @@ async function getAiSearchContext(env: Env, question: string): Promise<string> {
 async function askGpt(
   env: Env,
   question: string,
-  aiSearchContext: string,
+  context: string,
 ): Promise<string> {
   if (!env.CF_AIG_TOKEN) {
-    throw new Error("CF_AIG_TOKEN puuttuu Worker Secretseistä.");
+    throw new Error("CF_AIG_TOKEN puuttuu.");
   }
 
   const response = await fetch(AI_GATEWAY_URL, {
@@ -227,7 +188,7 @@ async function askGpt(
           role: "user",
           content:
             `Käyttäjän kysymys:\n${question}\n\n` +
-            `AI Search -taustatieto JuKiPuun sisällöistä:\n${aiSearchContext || "Ei lisätaustaa."}`,
+            `AI Search -taustatieto:\n${context || "Ei lisätaustaa."}`,
         },
       ],
       temperature: 0.3,
@@ -250,7 +211,7 @@ async function askGpt(
 
   return (
     data?.choices?.[0]?.message?.content ||
-    "GPT sai vastauksen, mutta sitä ei voitu purkaa näytettävään muotoon."
+    "GPT vastasi, mutta vastausta ei voitu purkaa."
   );
 }
 
@@ -259,7 +220,10 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders });
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders,
+      });
     }
 
     if (url.pathname === "/api/health") {
@@ -284,59 +248,61 @@ export default {
       const started = Date.now();
 
       try {
-        const cleanQuestion = await readQuestion(request);
+        const question = await readQuestion(request);
 
-        if (!cleanQuestion) {
-          return json({ ok: false, error: "Kysymys puuttuu tai on tyhjä." }, 400);
+        if (!question) {
+          return json(
+            {
+              ok: false,
+              error: "Kysymys puuttuu tai on tyhjä.",
+            },
+            400,
+          );
         }
 
-        if (!isPlantQuestion(cleanQuestion)) {
+        if (!isPlantQuestion(question)) {
           return json({
             ok: true,
             app: "AI-puuopas",
             version: VERSION,
-            question: cleanQuestion,
+            question,
             answer:
               "🌳 Olen JuKiPuun AI-puuopas. Vastaan vain kasvikuntaan, puihin, pensaisiin, kasvien hoitoon, puunkaatoon ja arboristin työhön liittyviin kysymyksiin.",
             durationMs: Date.now() - started,
           });
         }
 
-        const aiSearchContext = await getAiSearchContext(env, cleanQuestion);
+        const context = await getAiSearchContext(env, question);
 
-        let rawAnswer = "";
+        let answer: string;
 
         try {
-          rawAnswer = await askGpt(env, cleanQuestion, aiSearchContext);
+          answer = await askGpt(env, question, context);
         } catch (err) {
           console.error("GPT Gateway error:", err);
-          rawAnswer =
+          answer =
             "Löysin JuKiPuun aineistoa, mutta vastauksen muodostaminen GPT:n kautta epäonnistui juuri nyt. Kokeile hetken päästä uudelleen.";
         }
-
-        const finalAnswer = addServiceQuestionIfNeeded(rawAnswer, cleanQuestion);
 
         return json({
           ok: true,
           app: "AI-puuopas",
           version: VERSION,
           model: GPT_MODEL,
-          question: cleanQuestion,
-          answer: finalAnswer,
-          usedAiSearch: aiSearchContext.length > 0,
+          question,
+          answer: addServiceQuestion(answer, question),
+          usedAiSearch: context.length > 0,
           durationMs: Date.now() - started,
         });
       } catch (err) {
-        console.error("ASK endpoint error:", err);
-
-        const message = err instanceof Error ? err.message : String(err);
+        console.error("Ask endpoint error:", err);
 
         return json(
           {
             ok: false,
             app: "AI-puuopas",
             version: VERSION,
-            error: message,
+            error: err instanceof Error ? err.message : String(err),
             durationMs: Date.now() - started,
           },
           500,
@@ -348,6 +314,9 @@ export default {
       return env.ASSETS.fetch(request);
     }
 
-    return new Response("Not found", { status: 404 });
+    return new Response("Not found", {
+      status: 404,
+      headers: corsHeaders,
+    });
   },
 };
