@@ -166,24 +166,27 @@ export default {
         }
 
         const context = await getSmallRagContext(env, question);
-        const answer = await askGpt55(env, question, context);
+try {
+  const answer = await askGpt55(env, question, context);
 
-        return json({
-          ok: true,
-          answer,
-          version: VERSION,
-        });
-catch (err: any) {
-  console.error(JSON.stringify(err, null, 2));
+  return json({
+    ok: true,
+    answer,
+    version: VERSION,
+  });
+} catch (error: any) {
+  console.error("ASK_FATAL_ERROR", error?.message || error);
+  console.error("ASK_FATAL_STACK", error?.stack || "");
 
-  return new Response(
-    JSON.stringify(err, null, 2),
+  return json(
     {
-      status: 500,
-      headers: {
-        "Content-Type": "application/json"
-      }
-    }
+      ok: false,
+      answer:
+        "AI-palvelu ei saanut muodostettua vastausta juuri nyt. Kokeile hetken kuluttua uudelleen.",
+      debug: String(error?.message || error),
+      version: VERSION,
+    },
+    500
   );
 }
     }
