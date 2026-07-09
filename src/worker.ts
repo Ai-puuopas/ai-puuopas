@@ -11,20 +11,20 @@ export interface Env {
   kuvat?: any;
 }
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "https://jukipuu.fi",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
-const VERSION = "0.4.9.1 errorAny-gpt-gateway-rag-buildfix";
+const VERSION = "0.4.9.2-gpt-gateway-rag-buildfix";
 
 const AI_GATEWAY_URL =
   "https://gateway.ai.cloudflare.com/v1/c929d499c01584b02d13721d801e78ff/default/openai/chat/completions";
 
 const GPT_MODEL = "gpt-5.5";
 
-function json(data: unknown, status = 200) {
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "https://jukipuu.fi",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
@@ -34,11 +34,11 @@ function json(data: unknown, status = 200) {
   });
 }
 
-function normalize(text: unknown) {
+function normalize(text: unknown): string {
   return String(text || "").toLowerCase().trim();
 }
 
-function isPlantQuestion(question: string) {
+function isPlantQuestion(question: string): boolean {
   const q = normalize(question);
 
   const allowedWords = [
@@ -76,13 +76,13 @@ function isPlantQuestion(question: string) {
     "kallistunut", "vinossa",
     "sähkölinja", "sähkölinjat",
     "puutarha", "piha", "pihapuu", "pihapuun",
-    "istutus", "istuttaa", "multa", "lannoitus"
+    "istutus", "istuttaa", "multa", "lannoitus",
   ];
 
   return allowedWords.some((word) => q.includes(word));
 }
 
-function shouldAskJuKiPuuService(question: string) {
+function shouldAskJuKiPuuService(question: string): boolean {
   const q = normalize(question);
 
   const serviceIntentWords = [
@@ -100,13 +100,13 @@ function shouldAskJuKiPuuService(question: string) {
     "lahovika", "laho", "lahonnut",
     "repeämä", "repeytynyt",
     "kallistunut", "vinossa",
-    "mitä maksaa", "hinta", "paljon maksaa", "tarjous"
+    "mitä maksaa", "hinta", "paljon maksaa", "tarjous",
   ];
 
   return serviceIntentWords.some((word) => q.includes(word));
 }
 
-function shouldAvoidJuKiPuuService(question: string) {
+function shouldAvoidJuKiPuuService(question: string): boolean {
   const q = normalize(question);
 
   const avoidWords = [
@@ -114,13 +114,13 @@ function shouldAvoidJuKiPuuService(question: string) {
     "vesiverso", "vesiversot",
     "istutus", "istuttaa",
     "multa",
-    "lannoitus"
+    "lannoitus",
   ];
 
   return avoidWords.some((word) => q.includes(word));
 }
 
-function addServiceQuestionIfNeeded(answer: string, question: string) {
+function addServiceQuestionIfNeeded(answer: string, question: string): string {
   let finalAnswer = String(answer || "");
 
   const askService =
@@ -135,11 +135,11 @@ function addServiceQuestionIfNeeded(answer: string, question: string) {
   return finalAnswer;
 }
 
-async function readQuestion(request: Request) {
+async function readQuestion(request: Request): Promise<string> {
   const contentType = request.headers.get("content-type") || "";
 
   if (contentType.includes("application/json")) {
-    const body: any = await request.json();
+    const body = (await request.json()) as { question?: unknown };
     return String(body?.question || "").trim();
   }
 
@@ -154,19 +154,18 @@ async function readQuestion(request: Request) {
   return "";
 }
 
-function extractSearchChunks(searchResults: any) {
+function extractSearchChunks(searchResults: any): any[] {
   const chunks =
     searchResults?.chunks ||
     searchResults?.result?.chunks ||
     searchResults?.data ||
+    searchResults?.result?.data ||
     [];
 
-  if (!Array.isArray(chunks)) return [];
-
-  return chunks;
+  return Array.isArray(chunks) ? chunks : [];
 }
 
-async function getAiSearchContext(env: Env, question: string) {
+async function getAiSearchContext(env: Env, question: string): Promise<string> {
   if (!env.PUU_SEARCH) return "";
 
   try {
@@ -187,7 +186,9 @@ async function getAiSearchContext(env: Env, question: string) {
     return chunks
       .map((c: any, i: number) => {
         const text = c.text || c.content || c.markdown || "";
-        const source = c.source || c.filename || c.url || c.title || "AI Search";
+        const source =
+          c.source || c.filename || c.url || c.title || "AI Search";
+
         return `Lähde ${i + 1}: ${source}\n${text}`;
       })
       .filter((x: string) => x.trim().length > 0)
@@ -198,7 +199,11 @@ async function getAiSearchContext(env: Env, question: string) {
   }
 }
 
-async function askGpt(env: Env, question: string, aiSearchContext: string) {
+async function askGpt(
+  env: Env,
+  question: string,
+  aiSearchContext: string,
+): Promise<string> {
   if (!env.CF_AIG_TOKEN) {
     throw new Error("CF_AIG_TOKEN puuttuu Worker Secretseistä.");
   }
@@ -232,7 +237,7 @@ async function askGpt(env: Env, question: string, aiSearchContext: string) {
 
   const text = await response.text();
 
-  let data: any = {};
+  let data: any;
   try {
     data = JSON.parse(text);
   } catch {
@@ -285,7 +290,13 @@ export default {
         const cleanQuestion = await readQuestion(request);
 
         if (!cleanQuestion) {
-          return json({ ok: false, error: "Kysymys puuttuu tai on tyhjä." }, 400);
+          return json(
+            {
+              ok: false,
+              error: "Kysymys puuttuu tai on tyhjä.",
+            },
+            400,
+          );
         }
 
         if (!isPlantQuestion(cleanQuestion)) {
@@ -302,7 +313,7 @@ export default {
 
         const aiSearchContext = await getAiSearchContext(env, cleanQuestion);
 
-        let rawAnswer = "";
+        let rawAnswer: string;
 
         try {
           rawAnswer = await askGpt(env, cleanQuestion, aiSearchContext);
@@ -313,7 +324,10 @@ export default {
             "Löysin JuKiPuun aineistoa, mutta vastauksen muodostaminen GPT:n kautta epäonnistui juuri nyt. Kokeile hetken päästä uudelleen.";
         }
 
-        const finalAnswer = addServiceQuestionIfNeeded(rawAnswer, cleanQuestion);
+        const finalAnswer = addServiceQuestionIfNeeded(
+          rawAnswer,
+          cleanQuestion,
+        );
 
         return json({
           ok: true,
@@ -325,18 +339,21 @@ export default {
           usedAiSearch: aiSearchContext.length > 0,
           durationMs: Date.now() - started,
         });
-
+      } catch (err) {
         console.error("ASK endpoint error:", err);
+
+        const message =
+          err instanceof Error ? err.message : String(err);
 
         return json(
           {
             ok: false,
             app: "AI-puuopas",
             version: VERSION,
-            error: String(err?.message || err),
+            error: message,
             durationMs: Date.now() - started,
           },
-          500
+          500,
         );
       }
     }
