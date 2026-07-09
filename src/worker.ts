@@ -287,47 +287,32 @@ if (env.PUU_SEARCH) {
         const source = c.source || c.filename || c.url || "AI Search";
         return `Lähde ${i + 1}: ${source}\n${text}`;
       })
-      .join("\n\n---\n\n");
+        .join("\n\n---\n\n");
   } catch (err) {
     console.error("PUU_SEARCH search error:", err);
     aiSearchContext = "";
   }
 }
-        let rawAnswer: string;
 
-        try {
-          rawAnswer = await askGpt(env, cleanQuestion, aiSearchContext);
-        } catch (err) {
-          console.error("GPT Gateway error:", err);
+let rawAnswer: string;
 
-rawAnswer =
-  "Löysin JuKiPuun aineistoa, mutta vastauksen muodostaminen GPT:n kautta epäonnistui juuri nyt. Kokeile hetken päästä uudelleen.";
-        const finalAnswer = addServiceQuestionIfNeeded(rawAnswer, cleanQuestion);
+try {
+  rawAnswer = await askGpt(env, cleanQuestion, aiSearchContext);
+} catch (err) {
+  console.error("GPT Gateway error:", err);
 
-        return json({
-          ok: true,
-          app: "AI-puuopas",
-          version: VERSION,
-          model: GPT_MODEL,
-          question: cleanQuestion,
-          answer: finalAnswer,
-          durationMs: Date.now() - started,
-        });
-      } catch (err) {
-        console.error("Worker error:", err);
+  rawAnswer =
+    "Löysin JuKiPuun aineistoa, mutta vastauksen muodostaminen GPT:n kautta epäonnistui juuri nyt. Kokeile hetken päästä uudelleen.";
+}
 
-        return json(
-          {
-            ok: false,
-            error: "AI-puuopas ei saanut vastausta juuri nyt.",
-            detail: String(err),
-            version: VERSION,
-          },
-          500
-        );
-      }
-    }
+const finalAnswer = addServiceQuestionIfNeeded(rawAnswer, cleanQuestion);
 
-    return env.ASSETS.fetch(request);
-  },
-};
+return json({
+  ok: true,
+  app: "AI-puuopas",
+  version: VERSION,
+  model: GPT_MODEL,
+  question: cleanQuestion,
+  answer: finalAnswer,
+  durationMs: Date.now() - started,
+});
