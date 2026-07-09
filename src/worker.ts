@@ -11,11 +11,14 @@ export interface Env {
   kuvat?: any;
 }
 
-const VERSION = "0.4.9.3-clean-build";
+const VERSION = "0.4.9.4-gpt-rag-token-limit";
 const GPT_MODEL = "gpt-5.5";
 
 const AI_GATEWAY_URL =
   "https://gateway.ai.cloudflare.com/v1/c929d499c01584b02d13721d801e78ff/default/openai/chat/completions";
+
+const MAX_CONTEXT_CHARS_PER_CHUNK = 800;
+const MAX_TOTAL_CONTEXT_CHARS = 2600;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://jukipuu.fi",
@@ -126,6 +129,11 @@ function extractChunks(result: any): any[] {
   return Array.isArray(chunks) ? chunks : [];
 }
 
+function trimContext(context: string): string {
+  if (context.length <= MAX_TOTAL_CONTEXT_CHARS) return context;
+  return context.slice(0, MAX_TOTAL_CONTEXT_CHARS);
+}
+
 async function getAiSearchContext(env: Env, question: string): Promise<string> {
   if (!env.PUU_SEARCH) return "";
 
@@ -135,25 +143,43 @@ async function getAiSearchContext(env: Env, question: string): Promise<string> {
       ai_search_options: {
         retrieval: {
           retrieval_type: "hybrid",
-          max_num_results: 6,
+          max_num_results: 3,
           match_threshold: 0.35,
-          context_expansion: 1,
+          context_expansion: 0,
         },
       },
     });
 
     const chunks = extractChunks(result);
 
-    return chunks
+    const context = chunks
       .map((chunk: any, index: number) => {
-        const text = chunk.text || chunk.content || chunk.markdown || "";
+        const rawText =
+          chunk.text ||
+          chunk.content ||
+          chunk.markdown ||
+          "";
+
+        const text = String(rawText)
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, MAX_CONTEXT_CHARS_PER_CHUNK);
+
         const source =
-          chunk.source || chunk.filename || chunk.url || chunk.title || "AI Search";
+          chunk.source ||
+          chunk.filename ||
+          chunk.url ||
+          chunk.title ||
+          "AI Search";
+
+        if (!text) return "";
 
         return `Lähde ${index + 1}: ${source}\n${text}`;
       })
       .filter((item: string) => item.trim().length > 0)
       .join("\n\n---\n\n");
+
+    return trimContext(context);
   } catch (err) {
     console.error("AI Search error:", err);
     return "";
@@ -182,17 +208,17 @@ async function askGpt(
           role: "system",
           content:
             SYSTEM_PROMPT +
-            "\n\nKäytä AI Search -taustatietoa apuna. Älä keksi tietoja. Vastaa aina suomeksi.",
+            "\n\nKäytä AI Search -taustatietoa vain tukena. Vastaa ytimekkäästi. Älä kopioi lähdetekstiä pitkästi. Älä keksi tietoja. Vastaa aina suomeksi.",
         },
         {
           role: "user",
           content:
             `Käyttäjän kysymys:\n${question}\n\n` +
-            `AI Search -taustatieto:\n${context || "Ei lisätaustaa."}`,
+            `Lyhyt AI Search -taustatieto JuKiPuun aineistosta:\n${context || "Ei lisätaustaa."}`,
         },
       ],
       temperature: 0.3,
-      max_tokens: 700,
+      max_tokens: 450,
     }),
   });
 
@@ -278,14 +304,13 @@ export default {
 
         try {
           answer = await askGpt(env, question, context);
-} catch (err) {
-  console.error("GPT Gateway error:", err);
+        } catch (err) {
+          console.error("GPT Gateway error:", err);
 
-  const msg = err instanceof Error ? err.message : String(err);
+          answer =
+            "AI-palvelu ei saanut muodostettua vastausta juuri nyt. Kokeile hetken kuluttua uudelleen.";
+        }
 
-  answer =
-    "GPT ERROR:\n\n" + msg;
-}
         return json({
           ok: true,
           app: "AI-puuopas",
@@ -294,6 +319,7 @@ export default {
           question,
           answer: addServiceQuestion(answer, question),
           usedAiSearch: context.length > 0,
+          contextChars: context.length,
           durationMs: Date.now() - started,
         });
       } catch (err) {
