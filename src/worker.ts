@@ -17,7 +17,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const VERSION = "0.4.9-gpt-gateway-rag-buildfix";
+const VERSION = "0.4.9.1 errorAny-gpt-gateway-rag-buildfix";
 
 const AI_GATEWAY_URL =
   "https://gateway.ai.cloudflare.com/v1/c929d499c01584b02d13721d801e78ff/default/openai/chat/completions";
@@ -325,7 +325,7 @@ export default {
           usedAiSearch: aiSearchContext.length > 0,
           durationMs: Date.now() - started,
         });
-      } catch (err: any) {
+
         console.error("ASK endpoint error:", err);
 
         return json(
