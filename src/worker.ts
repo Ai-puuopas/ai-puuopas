@@ -173,20 +173,19 @@ export default {
           answer,
           version: VERSION,
         });
-      } catch (error: any) {
-        console.error("ASK_FATAL_ERROR", error?.message || error);
-        console.error("ASK_FATAL_STACK", error?.stack || "");
+catch (err: any) {
+  console.error(JSON.stringify(err, null, 2));
 
-        return json(
-          {
-            ok: false,
-            answer:
-              "AI-palvelu ei saanut muodostettua vastausta juuri nyt. Kokeile hetken kuluttua uudelleen.",
-            version: VERSION,
-          },
-          200,
-        );
+  return new Response(
+    JSON.stringify(err, null, 2),
+    {
+      status: 500,
+      headers: {
+        "Content-Type": "application/json"
       }
+    }
+  );
+}
     }
 
     return env.ASSETS.fetch(request);
