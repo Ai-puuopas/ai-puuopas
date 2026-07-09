@@ -281,7 +281,7 @@ export default {
         } catch (err) {
           console.error("GPT Gateway error:", err);
           answer =
-            "Löysin JuKiPuun aineistoa, mutta vastauksen muodostaminen GPT:n kautta epäonnistui juuri nyt. Kokeile hetken päästä uudelleen.";
+             "GPT ERROR:\n\n" + msg;
         }
 
         return json({
