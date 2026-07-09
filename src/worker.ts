@@ -316,3 +316,9 @@ return json({
   answer: finalAnswer,
   durationMs: Date.now() - started,
 });
+
+    }
+
+    return env.ASSETS.fetch(request);
+  },
+};
