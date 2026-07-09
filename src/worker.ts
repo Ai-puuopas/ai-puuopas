@@ -259,10 +259,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: corsHeaders,
-      });
+      return new Response(null, { status: 204, headers: corsHeaders });
     }
 
     if (url.pathname === "/api/health") {
@@ -290,13 +287,7 @@ export default {
         const cleanQuestion = await readQuestion(request);
 
         if (!cleanQuestion) {
-          return json(
-            {
-              ok: false,
-              error: "Kysymys puuttuu tai on tyhjä.",
-            },
-            400,
-          );
+          return json({ ok: false, error: "Kysymys puuttuu tai on tyhjä." }, 400);
         }
 
         if (!isPlantQuestion(cleanQuestion)) {
@@ -313,21 +304,17 @@ export default {
 
         const aiSearchContext = await getAiSearchContext(env, cleanQuestion);
 
-        let rawAnswer: string;
+        let rawAnswer = "";
 
         try {
           rawAnswer = await askGpt(env, cleanQuestion, aiSearchContext);
         } catch (err) {
           console.error("GPT Gateway error:", err);
-
           rawAnswer =
             "Löysin JuKiPuun aineistoa, mutta vastauksen muodostaminen GPT:n kautta epäonnistui juuri nyt. Kokeile hetken päästä uudelleen.";
         }
 
-        const finalAnswer = addServiceQuestionIfNeeded(
-          rawAnswer,
-          cleanQuestion,
-        );
+        const finalAnswer = addServiceQuestionIfNeeded(rawAnswer, cleanQuestion);
 
         return json({
           ok: true,
@@ -342,8 +329,7 @@ export default {
       } catch (err) {
         console.error("ASK endpoint error:", err);
 
-        const message =
-          err instanceof Error ? err.message : String(err);
+        const message = err instanceof Error ? err.message : String(err);
 
         return json(
           {
