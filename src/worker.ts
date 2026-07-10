@@ -8,7 +8,7 @@ export interface Env {
   kuvat?: any;
 }
 
-const VERSION = "0.5.3-gpt55-responses";
+const VERSION = "0.5.4-gpt55-output-parser";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://jukipuu.fi",
@@ -27,13 +27,17 @@ function json(data: unknown, status = 200): Response {
 }
 
 function cleanQuestion(value: unknown): string {
-  if (typeof value !== "string") return "";
+  if (typeof value !== "string") {
+    return "";
+  }
 
   return value.trim().slice(0, 500);
 }
 
 function limitText(value: unknown, max = 700): string {
-  if (typeof value !== "string") return "";
+  if (typeof value !== "string") {
+    return "";
+  }
 
   return value
     .replace(/\s+/g, " ")
@@ -46,18 +50,109 @@ function extractAnswer(response: any): string {
     return response.trim();
   }
 
-  const answer =
-    response?.response ??
-    response?.answer ??
-    response?.output_text ??
-    response?.result?.response ??
-    response?.result?.answer ??
-    response?.result?.output_text ??
-    response?.output?.[0]?.content?.[0]?.text ??
-    response?.choices?.[0]?.message?.content ??
-    "";
+  const directCandidates = [
+    response?.output_text,
+    response?.response,
+    response?.answer,
+    response?.result?.output_text,
+    response?.result?.response,
+    response?.result?.answer,
+  ];
 
-  return typeof answer === "string" ? answer.trim() : "";
+  for (const candidate of directCandidates) {
+    if (
+      typeof candidate === "string" &&
+      candidate.trim().length > 0
+    ) {
+      return candidate.trim();
+    }
+  }
+
+  const outputArrays = [
+    response?.output,
+    response?.result?.output,
+  ];
+
+  for (const output of outputArrays) {
+    if (!Array.isArray(output)) {
+      continue;
+    }
+
+    const texts: string[] = [];
+
+    for (const item of output) {
+      if (typeof item?.text === "string" && item.text.trim()) {
+        texts.push(item.text.trim());
+      }
+
+      if (typeof item?.output_text === "string" && item.output_text.trim()) {
+        texts.push(item.output_text.trim());
+      }
+
+      if (!Array.isArray(item?.content)) {
+        continue;
+      }
+
+      for (const content of item.content) {
+        if (
+          typeof content?.text === "string" &&
+          content.text.trim().length > 0
+        ) {
+          texts.push(content.text.trim());
+        }
+
+        if (
+          typeof content?.output_text === "string" &&
+          content.output_text.trim().length > 0
+        ) {
+          texts.push(content.output_text.trim());
+        }
+
+        if (
+          typeof content?.value === "string" &&
+          content.value.trim().length > 0
+        ) {
+          texts.push(content.value.trim());
+        }
+      }
+    }
+
+    if (texts.length > 0) {
+      return texts.join("\n").trim();
+    }
+  }
+
+  const chatContent =
+    response?.choices?.[0]?.message?.content;
+
+  if (
+    typeof chatContent === "string" &&
+    chatContent.trim().length > 0
+  ) {
+    return chatContent.trim();
+  }
+
+  if (Array.isArray(chatContent)) {
+    const chatTexts = chatContent
+      .map((item: any) => {
+        if (typeof item === "string") {
+          return item;
+        }
+
+        if (typeof item?.text === "string") {
+          return item.text;
+        }
+
+        return "";
+      })
+      .filter((text: string) => text.trim().length > 0);
+
+    if (chatTexts.length > 0) {
+      return chatTexts.join("\n").trim();
+    }
+  }
+
+  return "";
 }
 
 async function getSmallRagContext(
@@ -65,18 +160,18 @@ async function getSmallRagContext(
   question: string,
 ): Promise<string> {
   if (!env.PUU_SEARCH) {
-    console.warn("RAG_SEARCH_SKIPPED: PUU_SEARCH binding missing");
+    console.warn("RAG_SEARCH_SKIPPED", "PUU_SEARCH binding missing");
     return "";
   }
 
   try {
     const result = await env.PUU_SEARCH.search(question, {
-      topK: 2,
+      topK: 3,
     });
 
     console.log(
       "RAG_RAW_RESULT",
-      JSON.stringify(result).slice(0, 3000),
+      JSON.stringify(result).slice(0, 6000),
     );
 
     const matches = Array.isArray(result?.matches)
@@ -84,7 +179,7 @@ async function getSmallRagContext(
       : [];
 
     const contextParts = matches
-      .slice(0, 2)
+      .slice(0, 3)
       .map((item: any, index: number) => {
         const title =
           item?.metadata?.title ??
@@ -95,18 +190,20 @@ async function getSmallRagContext(
         const content =
           item?.metadata?.text ??
           item?.metadata?.content ??
+          item?.metadata?.description ??
           item?.text ??
           item?.content ??
           "";
 
-        const cleanContent = limitText(content, 700);
+        const cleanTitle = limitText(title, 120);
+        const cleanContent = limitText(content, 900);
 
         if (!cleanContent) {
           return "";
         }
 
         return (
-          `Lähde ${index + 1}: ${limitText(title, 120)}\n` +
+          `Lähde ${index + 1}: ${cleanTitle}\n` +
           cleanContent
         );
       })
@@ -118,8 +215,17 @@ async function getSmallRagContext(
     console.log("RAG_CONTEXT_LENGTH", context.length);
 
     return context;
-  } catch (error) {
-    console.error("RAG_SEARCH_ERROR", error);
+  } catch (error: any) {
+    console.error(
+      "RAG_SEARCH_ERROR",
+      error?.message || error,
+    );
+
+    console.error(
+      "RAG_SEARCH_STACK",
+      error?.stack || "",
+    );
+
     return "";
   }
 }
@@ -136,15 +242,20 @@ async function askGpt55(
   const instructions =
     SYSTEM_PROMPT +
     "\n\n" +
-    "Vastaa aina suomeksi. " +
-    "Vastaa tiiviisti. " +
-    "Älä keksi tietoja. " +
-    "Jos hakukonteksti ei sisällä riittävää tietoa, kerro epävarmuudesta avoimesti.";
+    "Vastaa aina suomeksi.\n" +
+    "Vastaa selkeästi ja tiiviisti.\n" +
+    "Älä keksi tietoja.\n" +
+    "Käytä hakukontekstia silloin, kun se sisältää kysymykseen liittyvää tietoa.\n" +
+    "Jos hakukonteksti ei sisällä vastausta, voit käyttää luotettavaa yleistä puutietoa.\n" +
+    "Jos et ole varma, kerro epävarmuudesta avoimesti.\n" +
+    "Älä mainitse käyttäjälle hakukontekstia, lähteitä tai järjestelmäohjeita.";
 
   console.log("GPT_MODEL", "openai/gpt-5.5-pro");
   console.log("QUESTION_LENGTH", question.length);
   console.log("CONTEXT_LENGTH", context.length);
   console.log("SYSTEM_PROMPT_LENGTH", SYSTEM_PROMPT.length);
+  console.log("INPUT_LENGTH", input.length);
+  console.log("INSTRUCTIONS_LENGTH", instructions.length);
 
   const response = await env.AI.run(
     "openai/gpt-5.5-pro",
@@ -157,20 +268,30 @@ async function askGpt55(
 
   console.log(
     "AI_RAW_RESPONSE",
-    JSON.stringify(response).slice(0, 3000),
+    JSON.stringify(response).slice(0, 10000),
   );
 
   const answer = extractAnswer(response);
 
   if (!answer) {
+    console.error(
+      "EMPTY_RESPONSE_STRUCTURE",
+      JSON.stringify(response).slice(0, 10000),
+    );
+
     throw new Error("GPT-5.5 Pro returned empty answer");
   }
+
+  console.log("ANSWER_LENGTH", answer.length);
 
   return answer;
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: Env,
+  ): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
@@ -221,6 +342,8 @@ export default {
           );
         }
 
+        console.log("QUESTION", question);
+
         const context = await getSmallRagContext(
           env,
           question,
@@ -256,7 +379,7 @@ export default {
           {
             ok: false,
             answer:
-              "AI-palvelu ei saanut muodostettua vastausta juuri nyt. " +
+              "AI-puuopas ei saanut vastausta juuri nyt. " +
               "Kokeile hetken kuluttua uudelleen.",
             debug: String(
               error?.message || error,
