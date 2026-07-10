@@ -8,7 +8,7 @@ export interface Env {
   kuvat?: any;
 }
 
-const VERSION = "0.5.2-workers-ai-gpt55";
+const VERSION = "0.5.3-gpt55-responses";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://jukipuu.fi",
@@ -129,9 +129,17 @@ async function askGpt55(
   question: string,
   context: string,
 ): Promise<string> {
-  const userPrompt =
+  const input =
     `Kysymys:\n${question}\n\n` +
     `Hakukonteksti:\n${context || "Ei hakukontekstia."}`;
+
+  const instructions =
+    SYSTEM_PROMPT +
+    "\n\n" +
+    "Vastaa aina suomeksi. " +
+    "Vastaa tiiviisti. " +
+    "Älä keksi tietoja. " +
+    "Jos hakukonteksti ei sisällä riittävää tietoa, kerro epävarmuudesta avoimesti.";
 
   console.log("GPT_MODEL", "openai/gpt-5.5-pro");
   console.log("QUESTION_LENGTH", question.length);
@@ -141,23 +149,9 @@ async function askGpt55(
   const response = await env.AI.run(
     "openai/gpt-5.5-pro",
     {
-      messages: [
-        {
-          role: "system",
-          content:
-            SYSTEM_PROMPT +
-            "\n\n" +
-            "Vastaa aina suomeksi. " +
-            "Vastaa tiiviisti. " +
-            "Älä keksi tietoja. " +
-            "Jos hakukonteksti ei sisällä vastausta, kerro epävarmuudesta avoimesti.",
-        },
-        {
-          role: "user",
-          content: userPrompt,
-        },
-      ],
-      max_tokens: 500,
+      input,
+      instructions,
+      max_output_tokens: 500,
     },
   );
 
@@ -169,7 +163,7 @@ async function askGpt55(
   const answer = extractAnswer(response);
 
   if (!answer) {
-    throw new Error("Workers AI returned empty answer");
+    throw new Error("GPT-5.5 Pro returned empty answer");
   }
 
   return answer;
