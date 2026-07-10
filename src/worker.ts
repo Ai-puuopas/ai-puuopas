@@ -8,7 +8,7 @@ export interface Env {
   kuvat?: any;
 }
 
-const VERSION = "0.5.1-workers-ai-gpt55";
+const VERSION = "0.5.2-workers-ai-gpt55";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://jukipuu.fi",
@@ -16,7 +16,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-function json(data: unknown, status = 200) {
+function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
@@ -28,65 +28,107 @@ function json(data: unknown, status = 200) {
 
 function cleanQuestion(value: unknown): string {
   if (typeof value !== "string") return "";
+
   return value.trim().slice(0, 500);
 }
 
 function limitText(value: unknown, max = 700): string {
   if (typeof value !== "string") return "";
-  return value.replace(/\s+/g, " ").trim().slice(0, max);
+
+  return value
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max);
 }
 
 function extractAnswer(response: any): string {
-  if (typeof response === "string") return response.trim();
+  if (typeof response === "string") {
+    return response.trim();
+  }
 
-  return (
-    response?.response ||
-    response?.answer ||
-    response?.output_text ||
-    response?.result?.response ||
-    response?.result?.answer ||
-    response?.result?.output_text ||
-    response?.output?.[0]?.content?.[0]?.text ||
-    response?.choices?.[0]?.message?.content ||
-    ""
-  ).trim();
+  const answer =
+    response?.response ??
+    response?.answer ??
+    response?.output_text ??
+    response?.result?.response ??
+    response?.result?.answer ??
+    response?.result?.output_text ??
+    response?.output?.[0]?.content?.[0]?.text ??
+    response?.choices?.[0]?.message?.content ??
+    "";
+
+  return typeof answer === "string" ? answer.trim() : "";
 }
 
-async function getSmallRagContext(env: Env, question: string): Promise<string> {
-  if (!env.PUU_SEARCH) return "";
+async function getSmallRagContext(
+  env: Env,
+  question: string,
+): Promise<string> {
+  if (!env.PUU_SEARCH) {
+    console.warn("RAG_SEARCH_SKIPPED: PUU_SEARCH binding missing");
+    return "";
+  }
 
   try {
     const result = await env.PUU_SEARCH.search(question, {
       topK: 2,
     });
 
-    const matches = Array.isArray(result?.matches) ? result.matches : [];
+    console.log(
+      "RAG_RAW_RESULT",
+      JSON.stringify(result).slice(0, 3000),
+    );
 
-    return matches
+    const matches = Array.isArray(result?.matches)
+      ? result.matches
+      : [];
+
+    const contextParts = matches
       .slice(0, 2)
       .map((item: any, index: number) => {
         const title =
-          item?.metadata?.title ||
-          item?.metadata?.source ||
+          item?.metadata?.title ??
+          item?.metadata?.source ??
+          item?.title ??
           `Hakutulos ${index + 1}`;
 
         const content =
-          item?.metadata?.text ||
-          item?.metadata?.content ||
-          item?.text ||
+          item?.metadata?.text ??
+          item?.metadata?.content ??
+          item?.text ??
+          item?.content ??
           "";
 
-        return `Lähde ${index + 1}: ${limitText(title, 120)}\n${limitText(content, 700)}`;
+        const cleanContent = limitText(content, 700);
+
+        if (!cleanContent) {
+          return "";
+        }
+
+        return (
+          `Lähde ${index + 1}: ${limitText(title, 120)}\n` +
+          cleanContent
+        );
       })
-      .filter(Boolean)
-      .join("\n\n");
+      .filter((item: string) => item.length > 0);
+
+    const context = contextParts.join("\n\n");
+
+    console.log("RAG_MATCH_COUNT", matches.length);
+    console.log("RAG_CONTEXT_LENGTH", context.length);
+
+    return context;
   } catch (error) {
     console.error("RAG_SEARCH_ERROR", error);
     return "";
   }
 }
 
-async function askGpt55(env: Env, question: string, context: string): Promise<string> {
+async function askGpt55(
+  env: Env,
+  question: string,
+  context: string,
+): Promise<string> {
   const userPrompt =
     `Kysymys:\n${question}\n\n` +
     `Hakukonteksti:\n${context || "Ei hakukontekstia."}`;
@@ -96,23 +138,33 @@ async function askGpt55(env: Env, question: string, context: string): Promise<st
   console.log("CONTEXT_LENGTH", context.length);
   console.log("SYSTEM_PROMPT_LENGTH", SYSTEM_PROMPT.length);
 
-  const response = await env.AI.run("openai/gpt-5.5-pro", {
-    messages: [
-      {
-        role: "system",
-        content:
-          SYSTEM_PROMPT +
-          "\n\nVastaa aina suomeksi. Vastaa tiiviisti. Älä keksi tietoja.",
-      },
-      {
-        role: "user",
-        content: userPrompt,
-      },
-    ],
-    max_tokens: 500,
-  });
+  const response = await env.AI.run(
+    "openai/gpt-5.5-pro",
+    {
+      messages: [
+        {
+          role: "system",
+          content:
+            SYSTEM_PROMPT +
+            "\n\n" +
+            "Vastaa aina suomeksi. " +
+            "Vastaa tiiviisti. " +
+            "Älä keksi tietoja. " +
+            "Jos hakukonteksti ei sisällä vastausta, kerro epävarmuudesta avoimesti.",
+        },
+        {
+          role: "user",
+          content: userPrompt,
+        },
+      ],
+      max_tokens: 500,
+    },
+  );
 
-  console.log("AI_RAW_RESPONSE", JSON.stringify(response).slice(0, 2000));
+  console.log(
+    "AI_RAW_RESPONSE",
+    JSON.stringify(response).slice(0, 3000),
+  );
 
   const answer = extractAnswer(response);
 
@@ -149,10 +201,20 @@ export default {
       });
     }
 
-    if (url.pathname === "/api/ask" && request.method === "POST") {
+    if (
+      url.pathname === "/api/ask" &&
+      request.method === "POST"
+    ) {
       try {
-        const body: any = await request.json().catch(() => ({}));
-        const question = cleanQuestion(body?.question || body?.q || body?.message);
+        const body: any = await request
+          .json()
+          .catch(() => ({}));
+
+        const question = cleanQuestion(
+          body?.question ??
+          body?.q ??
+          body?.message,
+        );
 
         if (!question) {
           return json(
@@ -165,30 +227,51 @@ export default {
           );
         }
 
-        const context = await getSmallRagContext(env, question);
-try {
-  const answer = await askGpt55(env, question, context);
+        const context = await getSmallRagContext(
+          env,
+          question,
+        );
 
-  return json({
-    ok: true,
-    answer,
-    version: VERSION,
-  });
-} catch (err: any) {
-  console.error("ASK_FATAL_ERROR", error?.message || error);
-  console.error("ASK_FATAL_STACK", error?.stack || "");
+        const answer = await askGpt55(
+          env,
+          question,
+          context,
+        );
 
-  return json(
-    {
-      ok: false,
-      answer:
-        "AI-palvelu ei saanut muodostettua vastausta juuri nyt. Kokeile hetken kuluttua uudelleen.",
-      debug: String(error?.message || error),
-      version: VERSION,
-    },
-    500
-  );
-}
+        return json({
+          ok: true,
+          answer,
+          version: VERSION,
+          rag: {
+            used: context.length > 0,
+            contextLength: context.length,
+          },
+        });
+      } catch (error: any) {
+        console.error(
+          "ASK_FATAL_ERROR",
+          error?.message || error,
+        );
+
+        console.error(
+          "ASK_FATAL_STACK",
+          error?.stack || "",
+        );
+
+        return json(
+          {
+            ok: false,
+            answer:
+              "AI-palvelu ei saanut muodostettua vastausta juuri nyt. " +
+              "Kokeile hetken kuluttua uudelleen.",
+            debug: String(
+              error?.message || error,
+            ),
+            version: VERSION,
+          },
+          500,
+        );
+      }
     }
 
     return env.ASSETS.fetch(request);
