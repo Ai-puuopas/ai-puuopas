@@ -196,7 +196,7 @@ async function getSmallRagContext(
           "";
 
         const cleanTitle = limitText(title, 120);
-        const cleanContent = limitText(content, 900);
+        const cleanContent = limitText(content, 1900);
 
         if (!cleanContent) {
           return "";
@@ -262,7 +262,7 @@ async function askGpt55(
     {
       input,
       instructions,
-      max_output_tokens: 500,
+      max_output_tokens: 2500,
     },
   );
 
