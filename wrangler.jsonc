@@ -8,6 +8,11 @@
     "directory": "./public",
     "binding": "ASSETS"
   },
+{
+  "analytics_engine_datasets": [
+    { "binding": "ANALYTICS_JUKIPUU", "dataset": "jukipuudataset" }
+  ]
+}
 
   "ai": {
     "binding": "AI"
