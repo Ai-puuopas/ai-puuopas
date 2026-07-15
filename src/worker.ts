@@ -6,9 +6,18 @@ export interface Env {
   PUU_SEARCH?: any;
   r2jukipuu?: R2Bucket;
   kuvat?: any;
+  CONVERSATIONS: DurableObjectNamespace;
 }
 
-const VERSION = "0.5.4-gpt55-output-parser";
+type ConversationTurn = {
+  question: string;
+  answer: string;
+};
+
+const VERSION = "0.6.0-conversation-memory";
+const CONVERSATION_COOKIE = "puuopas_conversation";
+const MAX_CONVERSATION_TURNS = 5;
+const MEMORY_TTL_MS = 24 * 60 * 60 * 1000;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://jukipuu.fi",
@@ -16,14 +25,46 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-function json(data: unknown, status = 200): Response {
+function json(
+  data: unknown,
+  status = 200,
+  extraHeaders: Record<string, string> = {},
+): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
       ...corsHeaders,
       "Content-Type": "application/json; charset=utf-8",
+      ...extraHeaders,
     },
   });
+}
+
+function getConversationId(request: Request): string {
+  const cookieHeader = request.headers.get("Cookie") || "";
+  const cookie = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${CONVERSATION_COOKIE}=`));
+
+  if (cookie) {
+    const value = decodeURIComponent(
+      cookie.slice(CONVERSATION_COOKIE.length + 1),
+    );
+
+    if (/^[0-9a-f-]{36}$/i.test(value)) {
+      return value;
+    }
+  }
+
+  return crypto.randomUUID();
+}
+
+function conversationCookie(conversationId: string): string {
+  return (
+    `${CONVERSATION_COOKIE}=${encodeURIComponent(conversationId)}; ` +
+    "Max-Age=86400; Path=/; HttpOnly; Secure; SameSite=Lax"
+  );
 }
 
 function cleanQuestion(value: unknown): string {
@@ -230,19 +271,41 @@ async function getSmallRagContext(
   }
 }
 
+function formatConversationHistory(
+  history: ConversationTurn[],
+): string {
+  if (history.length === 0) {
+    return "Ei aiempaa keskustelua.";
+  }
+
+  return history
+    .map(
+      (turn, index) =>
+        `Keskustelukierros ${index + 1}:\n` +
+        `Käyttäjä: ${turn.question}\n` +
+        `AI-puuopas: ${turn.answer}`,
+    )
+    .join("\n\n");
+}
+
 async function askGpt55(
   env: Env,
   question: string,
   context: string,
+  history: ConversationTurn[],
 ): Promise<string> {
   const input =
-    `Kysymys:\n${question}\n\n` +
+    `Aiempi keskustelu (enintään ${MAX_CONVERSATION_TURNS} viimeistä kierrosta):\n` +
+    `${formatConversationHistory(history)}\n\n` +
+    `Nykyinen kysymys:\n${question}\n\n` +
     `Hakukonteksti:\n${context || "Ei hakukontekstia."}`;
 
   const instructions =
     SYSTEM_PROMPT +
     "\n\n" +
     "Vastaa aina suomeksi.\n" +
+    "Hyödynnä aiempaa keskustelua jatkokysymysten ymmärtämiseen.\n" +
+    "Älä väitä muistavasi mitään annetun keskusteluhistorian ulkopuolelta.\n" +
     "Vastaa selkeästi ja tiiviisti.\n" +
     "Älä keksi tietoja.\n" +
     "Käytä hakukontekstia silloin, kun se sisältää kysymykseen liittyvää tietoa.\n" +
@@ -287,6 +350,106 @@ async function askGpt55(
   return answer;
 }
 
+export class ConversationMemory {
+  private state: DurableObjectState;
+  private env: Env;
+
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
+    this.env = env;
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    try {
+      const body: any = await request.json().catch(() => ({}));
+      const question = cleanQuestion(body?.question);
+
+      if (!question) {
+        return json(
+          {
+            ok: false,
+            answer: "Kysymys puuttuu.",
+          },
+          400,
+        );
+      }
+
+      const storedHistory =
+        (await this.state.storage.get<ConversationTurn[]>(
+          "history",
+        )) ?? [];
+
+      const history = storedHistory.slice(
+        -MAX_CONVERSATION_TURNS,
+      );
+
+      const ragQuestion = [
+        ...history.slice(-2).map((turn) => turn.question),
+        question,
+      ].join("\n");
+
+      const context = await getSmallRagContext(
+        this.env,
+        ragQuestion,
+      );
+
+      const answer = await askGpt55(
+        this.env,
+        question,
+        context,
+        history,
+      );
+
+      const updatedHistory = [
+        ...history,
+        {
+          question,
+          answer: limitText(answer, 6000),
+        },
+      ].slice(-MAX_CONVERSATION_TURNS);
+
+      await this.state.storage.put(
+        "history",
+        updatedHistory,
+      );
+
+      await this.state.storage.setAlarm(
+        Date.now() + MEMORY_TTL_MS,
+      );
+
+      return json({
+        ok: true,
+        answer,
+        historySize: updatedHistory.length,
+        rag: {
+          used: context.length > 0,
+          contextLength: context.length,
+        },
+      });
+    } catch (error: any) {
+      console.error(
+        "CONVERSATION_MEMORY_ERROR",
+        error?.message || error,
+      );
+
+      return json(
+        {
+          ok: false,
+          answer:
+            "AI-puuopas ei saanut vastausta juuri nyt. " +
+            "Kokeile hetken kuluttua uudelleen.",
+          debug: String(error?.message || error),
+        },
+        500,
+      );
+    }
+  }
+
+  async alarm(): Promise<void> {
+    await this.state.storage.deleteAll();
+  }
+}
+
 export default {
   async fetch(
     request: Request,
@@ -312,6 +475,7 @@ export default {
           aiSearch: !!env.PUU_SEARCH,
           r2: !!env.r2jukipuu,
           images: !!env.kuvat,
+          conversations: !!env.CONVERSATIONS,
         },
       });
     }
@@ -344,26 +508,45 @@ export default {
 
         console.log("QUESTION", question);
 
-        const context = await getSmallRagContext(
-          env,
-          question,
-        );
+        const conversationId = getConversationId(request);
+        const objectId =
+          env.CONVERSATIONS.idFromName(conversationId);
+        const memory = env.CONVERSATIONS.get(objectId);
 
-        const answer = await askGpt55(
-          env,
-          question,
-          context,
-        );
-
-        return json({
-          ok: true,
-          answer,
-          version: VERSION,
-          rag: {
-            used: context.length > 0,
-            contextLength: context.length,
+        const memoryResponse = await memory.fetch(
+          "https://conversation-memory/ask",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ question }),
           },
-        });
+        );
+
+        const result: any = await memoryResponse
+          .json()
+          .catch(() => ({}));
+
+        if (!memoryResponse.ok || !result?.ok) {
+          throw new Error(
+            result?.debug ||
+              "Conversation memory returned an error",
+          );
+        }
+
+        return json(
+          {
+            ...result,
+            conversationId,
+            version: VERSION,
+          },
+          200,
+          {
+            "Set-Cookie":
+              conversationCookie(conversationId),
+          },
+        );
       } catch (error: any) {
         console.error(
           "ASK_FATAL_ERROR",
@@ -394,3 +577,4 @@ export default {
     return env.ASSETS.fetch(request);
   },
 };
+
