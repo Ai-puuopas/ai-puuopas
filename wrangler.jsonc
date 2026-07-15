@@ -9,11 +9,25 @@
     "binding": "ASSETS"
   },
 
-"analytics":{
   "analytics_engine_datasets": [
     { "binding": "ANALYTICS_JUKIPUU", "dataset": "jukipuudataset" }
-  ]
-},
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CONVERSATIONS",
+        "class_name": "ConversationMemory"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ConversationMemory"]
+    }
+  ],
 
   "ai": {
     "binding": "AI"
