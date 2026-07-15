@@ -23,6 +23,8 @@
   const submitButton = form.querySelector('button[type="submit"], button');
   const searchRow = form.querySelector(".search-row") || form;
   let pendingImage = null;
+  let requestInProgress = false;
+  let loadingTimer = null;
   const treeImages = [null, null, null];
 
   const styles = document.createElement("style");
@@ -84,6 +86,23 @@
     }
     .puuopas-tree-submit:disabled { cursor: not-allowed; opacity: .55; }
     .puuopas-tree-status { color: #53655a; font-size: .9rem; }
+    .puuopas-loading {
+      align-items: center; display: grid; gap: 12px; grid-template-columns: auto 1fr;
+    }
+    .puuopas-loading-spinner {
+      animation: puuopas-spin 1s linear infinite; color: #2f633b;
+      display: inline-block; font-size: 1.8rem; line-height: 1;
+    }
+    .puuopas-loading-phase { display: block; }
+    .puuopas-loading-time {
+      color: #2f633b; font-variant-numeric: tabular-nums; font-weight: 700;
+      margin-top: 4px;
+    }
+    .puuopas-loading-note { color: #53655a; font-size: .92rem; margin-top: 5px; }
+    @keyframes puuopas-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .puuopas-loading-spinner { animation: none; }
+    }
     @media (max-width: 720px) {
       .puuopas-tree-slots { grid-template-columns: 1fr; }
       .puuopas-tree-slot { min-height: 150px; }
@@ -119,7 +138,56 @@
   searchRow.insertAdjacentElement("afterend", preview);
   preview.insertAdjacentElement("afterend", help);
 
+  function stopLoading() {
+    if (loadingTimer) {
+      clearInterval(loadingTimer);
+      loadingTimer = null;
+    }
+  }
+
+  function formatElapsed(seconds) {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+  }
+
+  function startLoading(initialPhase) {
+    stopLoading();
+    answerPanel.style.display = "block";
+    answerText.innerHTML =
+      '<div class="puuopas-loading" role="status" aria-live="polite">' +
+        '<span class="puuopas-loading-spinner" aria-hidden="true">↻</span>' +
+        '<div><strong class="puuopas-loading-phase"></strong>' +
+          '<div class="puuopas-loading-time"></div>' +
+          '<div class="puuopas-loading-note">Tietojen haku ja tarkistus voi kestää noin 1–1,5 minuuttia.</div>' +
+        '</div>' +
+      '</div>';
+
+    const startedAt = Date.now();
+    const phase = answerText.querySelector(".puuopas-loading-phase");
+    const elapsed = answerText.querySelector(".puuopas-loading-time");
+
+    function updateLoading() {
+      const seconds = Math.floor((Date.now() - startedAt) / 1000);
+      if (seconds < 15) {
+        phase.textContent = initialPhase;
+      } else if (seconds < 45) {
+        phase.textContent = "Tarkistan tuntomerkkejä ja tietoja...";
+      } else if (seconds < 75) {
+        phase.textContent = "Varmistan vastausta...";
+      } else {
+        phase.textContent = "Tarkistus jatkuu – järjestelmä työskentelee edelleen...";
+      }
+      elapsed.textContent = `⏱ Kulunut aika ${formatElapsed(seconds)}`;
+    }
+
+    updateLoading();
+    loadingTimer = setInterval(updateLoading, 1000);
+    return stopLoading;
+  }
+
   function showMessage(message) {
+    stopLoading();
     answerPanel.style.display = "block";
     answerText.textContent = message;
   }
@@ -239,22 +307,29 @@
     event.stopImmediatePropagation();
 
     const question = input.value.trim();
-    if (!question && !pendingImage) return;
+    if ((!question && !pendingImage) || requestInProgress) return;
 
-    showMessage(pendingImage ? "📷 Tunnistan kuvaa..." : "🌳 Tutkin asiaa...");
+    requestInProgress = true;
+    const finishLoading = startLoading(
+      pendingImage ? "Tunnistan kuvaa..." : "Haen ja tarkistan tietoja...",
+    );
     submitButton.disabled = true;
     input.disabled = true;
     attachButton.disabled = true;
 
     try {
       const data = await askApi({ question, image: pendingImage });
+      finishLoading();
       answerText.textContent = data.answer || "En saanut muodostettua vastausta.";
       clearImage();
     } catch (error) {
       console.error(error);
+      finishLoading();
       answerText.textContent = "❌ " +
         (error.message || "AI-puuopas ei saanut vastausta juuri nyt. Kokeile hetken kuluttua uudelleen.");
     } finally {
+      finishLoading();
+      requestInProgress = false;
       submitButton.disabled = false;
       input.disabled = false;
       attachButton.disabled = false;
@@ -386,27 +461,34 @@
 
     identifyButton.addEventListener("click", async () => {
       const images = treeImages.filter(Boolean);
-      if (images.length !== 3) return;
+      if (images.length !== 3 || requestInProgress) return;
       const totalBytes = images.reduce((sum, image) => sum + dataUrlSize(image.dataUrl), 0);
       if (totalBytes > MAX_TOTAL_IMAGE_BYTES) {
         showMessage("❌ Kuvien yhteiskoko on liian suuri. Valitse hieman pienemmät kuvat.");
         return;
       }
 
+      requestInProgress = true;
       identifyButton.disabled = true;
       status.textContent = "Tunnistan puuta kolmesta kuvasta...";
-      showMessage("🌳 Vertailen yleiskuvaa, runkoa ja lehteä tai silmua...");
+      const finishLoading = startLoading(
+        "Vertailen yleiskuvaa, runkoa ja lehteä tai silmua...",
+      );
       try {
         const data = await askApi({ images });
+        finishLoading();
         answerText.textContent = data.answer || "En saanut muodostettua tunnistusta.";
         status.textContent = "Tunnistus valmis";
         answerPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
       } catch (error) {
         console.error(error);
+        finishLoading();
         status.textContent = "Tunnistus epäonnistui";
         answerText.textContent = "❌ " +
           (error.message || "AI-puuopas ei saanut vastausta juuri nyt. Kokeile hetken kuluttua uudelleen.");
       } finally {
+        finishLoading();
+        requestInProgress = false;
         identifyButton.disabled = false;
       }
     });
