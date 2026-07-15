@@ -15,6 +15,8 @@ Tiedosto `public/puuopas-chat.js` lisää nykyiseen keskustelukenttään:
 - kasvin, puun, sienen tai tuholaisen kuvatunnistuksen
 - “Tunnista puu” -kortille kolmen kuvan tunnistuksen: yleiskuva, runko ja
   lehti tai silmu
+- lähetyksen jälkeisen etenemisilmaisimen, kuluneen ajan ja arvion siitä, että
+  tietojen haku ja tarkistus voi kestää noin 1–1,5 minuuttia
 - saman viiden keskustelukierroksen muistin myös sivujen välisissä API-kutsuissa
 
 Lisää moduuli Puuoppaan HTML-sivun loppuun ennen `</body>`-tagia:
