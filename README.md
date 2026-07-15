@@ -2,6 +2,10 @@
 
 Cloudflare Worker -taustapalvelu JuKiPuun AI-puuoppaalle.
 
+Julkinen käyttöliittymä:
+
+<https://ai-puuopas.jukipuu-fi.workers.dev/>
+
 ## Kuvan liittäminen keskusteluun
 
 Tiedosto `public/puuopas-chat.js` lisää nykyiseen keskustelukenttään:

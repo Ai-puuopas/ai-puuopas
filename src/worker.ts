@@ -21,7 +21,7 @@ type SubmittedImage = {
   label: string;
 };
 
-const VERSION = "0.8.0-three-image-tree-identification";
+const VERSION = "0.8.1-public-web-ui";
 const CONVERSATION_COOKIE = "puuopas_conversation";
 const MAX_CONVERSATION_TURNS = 5;
 const MEMORY_TTL_MS = 24 * 60 * 60 * 1000;
