@@ -337,7 +337,10 @@
       }
 
       slot.addEventListener("click", (event) => {
-        if (event.target.closest(".puuopas-tree-remove")) return;
+        if (
+          event.target === slotInput ||
+          event.target.closest(".puuopas-tree-remove")
+        ) return;
         slotInput.click();
       });
       slot.addEventListener("keydown", (event) => {
