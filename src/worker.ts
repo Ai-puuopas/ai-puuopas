@@ -21,7 +21,7 @@ type SubmittedImage = {
   label: string;
 };
 
-const VERSION = "0.8.1-public-web-ui";
+const VERSION = "0.8.2-loading-status";
 const CONVERSATION_COOKIE = "puuopas_conversation";
 const MAX_CONVERSATION_TURNS = 5;
 const MEMORY_TTL_MS = 24 * 60 * 60 * 1000;
