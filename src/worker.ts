@@ -18,16 +18,28 @@ type SubmittedImage = {
   dataUrl: string;
   mimeType: string;
   size: number;
+  label: string;
 };
 
-const VERSION = "0.7.0-image-identification";
+const VERSION = "0.8.0-three-image-tree-identification";
 const CONVERSATION_COOKIE = "puuopas_conversation";
 const MAX_CONVERSATION_TURNS = 5;
 const MEMORY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
+const MAX_IMAGES = 3;
 const DEFAULT_IMAGE_QUESTION =
   "Tunnista kuvassa näkyvä kasvi, puu, sieni tai tuholainen. " +
   "Kerro näkyvät tuntomerkit, todennäköisin tunnistus ja tunnistuksen varmuus.";
+const DEFAULT_TREE_QUESTION =
+  "Tunnista puulaji kolmen kuvan perusteella. Vertaa yleiskuvaa, runkoa sekä " +
+  "lehteä tai silmua. Kerro näkyvät tuntomerkit, todennäköisin laji, " +
+  "vaihtoehtoiset lajit ja tunnistuksen varmuus.";
+const TREE_IMAGE_LABELS = [
+  "Kuva 1 – puun yleiskuva",
+  "Kuva 2 – runko ja kaarna",
+  "Kuva 3 – lehti tai silmu",
+];
 const SUPPORTED_IMAGE_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -100,7 +112,10 @@ function cleanQuestion(value: unknown): string {
   return value.trim().slice(0, 500);
 }
 
-function cleanImage(value: unknown): SubmittedImage | null {
+function cleanImage(
+  value: unknown,
+  label = "Keskusteluun liitetty kuva",
+): SubmittedImage | null {
   const dataUrl =
     typeof value === "string"
       ? value
@@ -132,7 +147,38 @@ function cleanImage(value: unknown): SubmittedImage | null {
     dataUrl,
     mimeType: match[1],
     size,
+    label,
   };
+}
+
+function cleanImages(body: any): SubmittedImage[] {
+  const submitted = Array.isArray(body?.images)
+    ? body.images
+    : body?.image
+      ? [body.image]
+      : [];
+
+  if (submitted.length > MAX_IMAGES) {
+    throw new Error("TOO_MANY_IMAGES");
+  }
+
+  const images = submitted
+    .map((value: unknown, index: number) =>
+      cleanImage(
+        value,
+        Array.isArray(body?.images)
+          ? TREE_IMAGE_LABELS[index]
+          : "Keskusteluun liitetty kuva",
+      ),
+    )
+    .filter((image: SubmittedImage | null): image is SubmittedImage => !!image);
+
+  const totalSize = images.reduce((sum, image) => sum + image.size, 0);
+  if (totalSize > MAX_TOTAL_IMAGE_BYTES) {
+    throw new Error("IMAGES_TOO_LARGE");
+  }
+
+  return images;
 }
 
 function limitText(value: unknown, max = 700): string {
@@ -353,7 +399,7 @@ async function askGpt55(
   question: string,
   context: string,
   history: ConversationTurn[],
-  image: SubmittedImage | null,
+  images: SubmittedImage[],
 ): Promise<string> {
   const textInput =
     `Aiempi keskustelu (enintään ${MAX_CONVERSATION_TURNS} viimeistä kierrosta):\n` +
@@ -361,17 +407,22 @@ async function askGpt55(
     `Nykyinen kysymys:\n${question}\n\n` +
     `Hakukonteksti:\n${context || "Ei hakukontekstia."}`;
 
-  const input: any = image
+  const imageContent = images.flatMap((image) => [
+    { type: "input_text", text: `${image.label}:` },
+    {
+      type: "input_image",
+      image_url: image.dataUrl,
+      detail: "high",
+    },
+  ]);
+
+  const input: any = images.length > 0
     ? [
         {
           role: "user",
           content: [
             { type: "input_text", text: textInput },
-            {
-              type: "input_image",
-              image_url: image.dataUrl,
-              detail: "high",
-            },
+            ...imageContent,
           ],
         },
       ]
@@ -389,6 +440,8 @@ async function askGpt55(
     "Jos hakukonteksti ei sisällä vastausta, voit käyttää luotettavaa yleistä puutietoa.\n" +
     "Jos et ole varma, kerro epävarmuudesta avoimesti.\n" +
     "Kun mukana on kuva, erottele näkyvät havainnot ja todennäköinen tunnistus.\n" +
+    "Kun mukana on kolme nimettyä puukuvaa, tarkastele jokaista kuvaa erikseen ja vertaile niiden tuntomerkkejä ennen johtopäätöstä.\n" +
+    "Kolmen puukuvan vastauksessa anna: näkyvät havainnot kuvittain, todennäköisin puulaji, enintään kaksi vaihtoehtoa, varmuusarvio ja tarvittaessa puuttuva tuntomerkki.\n" +
     "Kerro tunnistuksen varmuus ja pyydä tarvittaessa lisäkuvia tai tietoja paikasta, koosta ja vuodenajasta.\n" +
     "Älä koskaan päättele sienen syötävyyttä turvalliseksi pelkän kuvan perusteella.\n" +
     "Älä suosittele torjunta-ainetta ennen kuin tuholainen on tunnistettu riittävällä varmuudella.\n" +
@@ -399,8 +452,11 @@ async function askGpt55(
   console.log("CONTEXT_LENGTH", context.length);
   console.log("SYSTEM_PROMPT_LENGTH", SYSTEM_PROMPT.length);
   console.log("INPUT_TEXT_LENGTH", textInput.length);
-  console.log("IMAGE_INCLUDED", !!image);
-  console.log("IMAGE_BYTES", image?.size || 0);
+  console.log("IMAGE_COUNT", images.length);
+  console.log(
+    "IMAGE_BYTES",
+    images.reduce((sum, image) => sum + image.size, 0),
+  );
   console.log("INSTRUCTIONS_LENGTH", instructions.length);
 
   const response = await env.AI.run(
@@ -445,10 +501,14 @@ export class ConversationMemory {
   async fetch(request: Request): Promise<Response> {
     try {
       const body: any = await request.json().catch(() => ({}));
-      const image = cleanImage(body?.image);
+      const images = cleanImages(body);
       const question =
         cleanQuestion(body?.question) ||
-        (image ? DEFAULT_IMAGE_QUESTION : "");
+        (images.length === 3
+          ? DEFAULT_TREE_QUESTION
+          : images.length > 0
+            ? DEFAULT_IMAGE_QUESTION
+            : "");
 
       if (!question) {
         return json(
@@ -475,7 +535,7 @@ export class ConversationMemory {
       ].join("\n");
 
       const context =
-        image && body?.questionWasEmpty
+        images.length > 0 && body?.questionWasEmpty
           ? ""
           : await getSmallRagContext(this.env, ragQuestion);
 
@@ -484,7 +544,7 @@ export class ConversationMemory {
         question,
         context,
         history,
-        image,
+        images,
       );
 
       const updatedHistory = [
@@ -507,7 +567,8 @@ export class ConversationMemory {
       return json({
         ok: true,
         answer,
-        imageUsed: !!image,
+        imageUsed: images.length > 0,
+        imagesUsed: images.length,
         historySize: updatedHistory.length,
         rag: {
           used: context.length > 0,
@@ -583,9 +644,14 @@ export default {
           body?.message,
         );
 
-        const image = cleanImage(body?.image);
+        const images = cleanImages(body);
         const effectiveQuestion =
-          question || (image ? DEFAULT_IMAGE_QUESTION : "");
+          question ||
+          (images.length === 3
+            ? DEFAULT_TREE_QUESTION
+            : images.length > 0
+              ? DEFAULT_IMAGE_QUESTION
+              : "");
 
         if (!effectiveQuestion) {
           return json(
@@ -599,7 +665,7 @@ export default {
         }
 
         console.log("QUESTION", effectiveQuestion);
-        console.log("IMAGE_INCLUDED", !!image);
+        console.log("IMAGE_COUNT", images.length);
 
         const conversationId =
           cleanConversationId(body?.conversationId) ||
@@ -618,7 +684,7 @@ export default {
             body: JSON.stringify({
               question: effectiveQuestion,
               questionWasEmpty: !question,
-              image,
+              images,
             }),
           },
         );
@@ -666,6 +732,28 @@ export default {
               version: VERSION,
             },
             413,
+          );
+        }
+
+        if (error?.message === "IMAGES_TOO_LARGE") {
+          return json(
+            {
+              ok: false,
+              answer: "Kuvien yhteiskoko on liian suuri. Kolmen kuvan yhteiskoko saa olla enintään 12 Mt.",
+              version: VERSION,
+            },
+            413,
+          );
+        }
+
+        if (error?.message === "TOO_MANY_IMAGES") {
+          return json(
+            {
+              ok: false,
+              answer: "Voit lähettää enintään kolme kuvaa kerrallaan.",
+              version: VERSION,
+            },
+            400,
           );
         }
 
