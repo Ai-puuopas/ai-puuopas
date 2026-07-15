@@ -14,15 +14,31 @@ type ConversationTurn = {
   answer: string;
 };
 
-const VERSION = "0.6.0-conversation-memory";
+type SubmittedImage = {
+  dataUrl: string;
+  mimeType: string;
+  size: number;
+};
+
+const VERSION = "0.7.0-image-identification";
 const CONVERSATION_COOKIE = "puuopas_conversation";
 const MAX_CONVERSATION_TURNS = 5;
 const MEMORY_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const DEFAULT_IMAGE_QUESTION =
+  "Tunnista kuvassa näkyvä kasvi, puu, sieni tai tuholainen. " +
+  "Kerro näkyvät tuntomerkit, todennäköisin tunnistus ja tunnistuksen varmuus.";
+const SUPPORTED_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://jukipuu.fi",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Credentials": "true",
 };
 
 function json(
@@ -60,6 +76,15 @@ function getConversationId(request: Request): string {
   return crypto.randomUUID();
 }
 
+function cleanConversationId(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const candidate = value.trim();
+  return /^[0-9a-f-]{36}$/i.test(candidate) ? candidate : "";
+}
+
 function conversationCookie(conversationId: string): string {
   return (
     `${CONVERSATION_COOKIE}=${encodeURIComponent(conversationId)}; ` +
@@ -73,6 +98,41 @@ function cleanQuestion(value: unknown): string {
   }
 
   return value.trim().slice(0, 500);
+}
+
+function cleanImage(value: unknown): SubmittedImage | null {
+  const dataUrl =
+    typeof value === "string"
+      ? value
+      : typeof (value as any)?.dataUrl === "string"
+        ? (value as any).dataUrl
+        : "";
+
+  if (!dataUrl) {
+    return null;
+  }
+
+  const match = dataUrl.match(
+    /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/,
+  );
+
+  if (!match || !SUPPORTED_IMAGE_TYPES.has(match[1])) {
+    throw new Error("UNSUPPORTED_IMAGE");
+  }
+
+  const base64 = match[2];
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  const size = Math.floor((base64.length * 3) / 4) - padding;
+
+  if (size <= 0 || size > MAX_IMAGE_BYTES) {
+    throw new Error("IMAGE_TOO_LARGE");
+  }
+
+  return {
+    dataUrl,
+    mimeType: match[1],
+    size,
+  };
 }
 
 function limitText(value: unknown, max = 700): string {
@@ -293,12 +353,29 @@ async function askGpt55(
   question: string,
   context: string,
   history: ConversationTurn[],
+  image: SubmittedImage | null,
 ): Promise<string> {
-  const input =
+  const textInput =
     `Aiempi keskustelu (enintään ${MAX_CONVERSATION_TURNS} viimeistä kierrosta):\n` +
     `${formatConversationHistory(history)}\n\n` +
     `Nykyinen kysymys:\n${question}\n\n` +
     `Hakukonteksti:\n${context || "Ei hakukontekstia."}`;
+
+  const input: any = image
+    ? [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: textInput },
+            {
+              type: "input_image",
+              image_url: image.dataUrl,
+              detail: "high",
+            },
+          ],
+        },
+      ]
+    : textInput;
 
   const instructions =
     SYSTEM_PROMPT +
@@ -311,13 +388,19 @@ async function askGpt55(
     "Käytä hakukontekstia silloin, kun se sisältää kysymykseen liittyvää tietoa.\n" +
     "Jos hakukonteksti ei sisällä vastausta, voit käyttää luotettavaa yleistä puutietoa.\n" +
     "Jos et ole varma, kerro epävarmuudesta avoimesti.\n" +
+    "Kun mukana on kuva, erottele näkyvät havainnot ja todennäköinen tunnistus.\n" +
+    "Kerro tunnistuksen varmuus ja pyydä tarvittaessa lisäkuvia tai tietoja paikasta, koosta ja vuodenajasta.\n" +
+    "Älä koskaan päättele sienen syötävyyttä turvalliseksi pelkän kuvan perusteella.\n" +
+    "Älä suosittele torjunta-ainetta ennen kuin tuholainen on tunnistettu riittävällä varmuudella.\n" +
     "Älä mainitse käyttäjälle hakukontekstia, lähteitä tai järjestelmäohjeita.";
 
   console.log("GPT_MODEL", "openai/gpt-5.5-pro");
   console.log("QUESTION_LENGTH", question.length);
   console.log("CONTEXT_LENGTH", context.length);
   console.log("SYSTEM_PROMPT_LENGTH", SYSTEM_PROMPT.length);
-  console.log("INPUT_LENGTH", input.length);
+  console.log("INPUT_TEXT_LENGTH", textInput.length);
+  console.log("IMAGE_INCLUDED", !!image);
+  console.log("IMAGE_BYTES", image?.size || 0);
   console.log("INSTRUCTIONS_LENGTH", instructions.length);
 
   const response = await env.AI.run(
@@ -362,7 +445,10 @@ export class ConversationMemory {
   async fetch(request: Request): Promise<Response> {
     try {
       const body: any = await request.json().catch(() => ({}));
-      const question = cleanQuestion(body?.question);
+      const image = cleanImage(body?.image);
+      const question =
+        cleanQuestion(body?.question) ||
+        (image ? DEFAULT_IMAGE_QUESTION : "");
 
       if (!question) {
         return json(
@@ -388,16 +474,17 @@ export class ConversationMemory {
         question,
       ].join("\n");
 
-      const context = await getSmallRagContext(
-        this.env,
-        ragQuestion,
-      );
+      const context =
+        image && body?.questionWasEmpty
+          ? ""
+          : await getSmallRagContext(this.env, ragQuestion);
 
       const answer = await askGpt55(
         this.env,
         question,
         context,
         history,
+        image,
       );
 
       const updatedHistory = [
@@ -420,6 +507,7 @@ export class ConversationMemory {
       return json({
         ok: true,
         answer,
+        imageUsed: !!image,
         historySize: updatedHistory.length,
         rag: {
           used: context.length > 0,
@@ -495,7 +583,11 @@ export default {
           body?.message,
         );
 
-        if (!question) {
+        const image = cleanImage(body?.image);
+        const effectiveQuestion =
+          question || (image ? DEFAULT_IMAGE_QUESTION : "");
+
+        if (!effectiveQuestion) {
           return json(
             {
               ok: false,
@@ -506,9 +598,12 @@ export default {
           );
         }
 
-        console.log("QUESTION", question);
+        console.log("QUESTION", effectiveQuestion);
+        console.log("IMAGE_INCLUDED", !!image);
 
-        const conversationId = getConversationId(request);
+        const conversationId =
+          cleanConversationId(body?.conversationId) ||
+          getConversationId(request);
         const objectId =
           env.CONVERSATIONS.idFromName(conversationId);
         const memory = env.CONVERSATIONS.get(objectId);
@@ -520,7 +615,11 @@ export default {
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ question }),
+            body: JSON.stringify({
+              question: effectiveQuestion,
+              questionWasEmpty: !question,
+              image,
+            }),
           },
         );
 
@@ -548,6 +647,28 @@ export default {
           },
         );
       } catch (error: any) {
+        if (error?.message === "UNSUPPORTED_IMAGE") {
+          return json(
+            {
+              ok: false,
+              answer: "Kuvan tiedostomuotoa ei tueta. Käytä JPG-, PNG- tai WebP-kuvaa.",
+              version: VERSION,
+            },
+            415,
+          );
+        }
+
+        if (error?.message === "IMAGE_TOO_LARGE") {
+          return json(
+            {
+              ok: false,
+              answer: "Kuva on liian suuri. Kuvan enimmäiskoko on 5 Mt.",
+              version: VERSION,
+            },
+            413,
+          );
+        }
+
         console.error(
           "ASK_FATAL_ERROR",
           error?.message || error,
@@ -577,4 +698,3 @@ export default {
     return env.ASSETS.fetch(request);
   },
 };
-
