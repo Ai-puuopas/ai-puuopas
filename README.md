@@ -32,3 +32,22 @@ enintään 12 Mt. Kuvien sisältöä ei tallenneta keskustelumuistiin.
 Kolmen kuvan tunnistuksessa kaikki kuvapaikat täytetään ennen tunnistuksen
 käynnistämistä. AI käsittelee kuvat nimettyinä, vertailee tuntomerkkejä ja
 ilmoittaa todennäköisimmän lajin, vaihtoehdot sekä tunnistuksen varmuuden.
+
+## Kuntoarvion raakaversio
+
+“Tee kuntoarvio” -kortti avaa JuKiPuun kuntoarviopohjaan perustuvan ohjatun
+lomakkeen salasanan tarkistamisen jälkeen. Salasana säilytetään vain Cloudflare
+Workerin salaisuutena eikä sitä kirjoiteta selaimen lähdekoodiin tai GitHubiin.
+Hyväksytty istunto on voimassa kahdeksan tuntia ja unohtuu sivun latautuessa
+uudelleen. Kansisivulle vaaditaan puun yleiskuva. Tyven ja ympäristön, rungon
+sekä latvuksen kuvat ovat valinnaisia. Käyttäjä voi lisätä tunnetut kohde- ja
+mittatiedot, minkä jälkeen AI laatii jäsennellyn alustavan luonnoksen.
+Sijainti voidaan kirjoittaa itse tai lukea puhelimesta käyttäjän painaessa
+“Hae nykyinen sijainti” -painiketta ja hyväksyessä selaimen sijaintiluvan.
+Raporttiin tallennetaan WGS84-koordinaatit sekä puhelimen ilmoittama arvioitu
+tarkkuus. Sijaintitieto on suuntaa-antava eikä osoita oikeudellisesti tarkkaa
+tonttirajaa.
+
+Luonnos näytetään tulostettavana raporttina, jonka ensimmäisellä sivulla on
+puun yleiskuva. Selaimen tulostustoiminnolla raportin voi tallentaa PDF:ksi.
+Luonnos ei korvaa paikan päällä tehtävää arboristin kuntoarviota.

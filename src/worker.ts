@@ -7,6 +7,7 @@ export interface Env {
   r2jukipuu?: R2Bucket;
   kuvat?: any;
   CONVERSATIONS: DurableObjectNamespace;
+  ASSESSMENT_PASSWORD?: string;
 }
 
 type ConversationTurn = {
@@ -21,13 +22,14 @@ type SubmittedImage = {
   label: string;
 };
 
-const VERSION = "0.8.2-loading-status";
+const VERSION = "0.10.0-assessment-password";
+const ASSESSMENT_TOKEN_TTL_SECONDS = 8 * 60 * 60;
 const CONVERSATION_COOKIE = "puuopas_conversation";
 const MAX_CONVERSATION_TURNS = 5;
 const MEMORY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
-const MAX_IMAGES = 3;
+const MAX_IMAGES = 4;
 const DEFAULT_IMAGE_QUESTION =
   "Tunnista kuvassa näkyvä kasvi, puu, sieni tai tuholainen. " +
   "Kerro näkyvät tuntomerkit, todennäköisin tunnistus ja tunnistuksen varmuus.";
@@ -35,10 +37,20 @@ const DEFAULT_TREE_QUESTION =
   "Tunnista puulaji kolmen kuvan perusteella. Vertaa yleiskuvaa, runkoa sekä " +
   "lehteä tai silmua. Kerro näkyvät tuntomerkit, todennäköisin laji, " +
   "vaihtoehtoiset lajit ja tunnistuksen varmuus.";
+const DEFAULT_ASSESSMENT_QUESTION =
+  "Laadi toimitetuista kohdetiedoista ja kuvista alustava puun kuntoarvion " +
+  "raakaversio. Erota näkyvät havainnot, käyttäjän ilmoittamat tiedot, " +
+  "epävarmuudet, riskit ja suositellut jatkotoimenpiteet.";
 const TREE_IMAGE_LABELS = [
   "Kuva 1 – puun yleiskuva",
   "Kuva 2 – runko ja kaarna",
   "Kuva 3 – lehti tai silmu",
+];
+const ASSESSMENT_IMAGE_LABELS = [
+  "Kansikuva – puun yleiskuva",
+  "Tyvi ja ympäristö",
+  "Runko ja haaraliitokset",
+  "Latvus",
 ];
 const SUPPORTED_IMAGE_TYPES = new Set([
   "image/jpeg",
@@ -52,6 +64,75 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Allow-Credentials": "true",
 };
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function fromBase64Url(value: string): Uint8Array | null {
+  try {
+    const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+  } catch {
+    return null;
+  }
+}
+
+async function passwordMatches(candidate: string, expected: string): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const [candidateHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(candidate)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+  const left = new Uint8Array(candidateHash);
+  const right = new Uint8Array(expectedHash);
+  let difference = left.length ^ right.length;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left[index] ^ (right[index] ?? 0);
+  }
+  return difference === 0;
+}
+
+async function assessmentKey(password: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"],
+  );
+}
+
+async function createAssessmentToken(password: string): Promise<string> {
+  const expires = Math.floor(Date.now() / 1000) + ASSESSMENT_TOKEN_TTL_SECONDS;
+  const nonce = base64Url(crypto.getRandomValues(new Uint8Array(12)));
+  const payload = `${expires}.${nonce}`;
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    await assessmentKey(password),
+    new TextEncoder().encode(payload),
+  );
+  return `${payload}.${base64Url(new Uint8Array(signature))}`;
+}
+
+async function validAssessmentToken(token: unknown, password: string): Promise<boolean> {
+  if (typeof token !== "string" || token.length > 300) return false;
+  const parts = token.split(".");
+  if (parts.length !== 3 || !/^\d{10}$/.test(parts[0])) return false;
+  const expires = Number(parts[0]);
+  if (!Number.isFinite(expires) || expires < Math.floor(Date.now() / 1000)) return false;
+  const signature = fromBase64Url(parts[2]);
+  if (!signature) return false;
+  return crypto.subtle.verify(
+    "HMAC",
+    await assessmentKey(password),
+    signature,
+    new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
+  );
+}
 
 function json(
   data: unknown,
@@ -104,12 +185,12 @@ function conversationCookie(conversationId: string): string {
   );
 }
 
-function cleanQuestion(value: unknown): string {
+function cleanQuestion(value: unknown, maxLength = 500): string {
   if (typeof value !== "string") {
     return "";
   }
 
-  return value.trim().slice(0, 500);
+  return value.trim().slice(0, maxLength);
 }
 
 function cleanImage(
@@ -163,14 +244,22 @@ function cleanImages(body: any): SubmittedImage[] {
   }
 
   const images = submitted
-    .map((value: unknown, index: number) =>
-      cleanImage(
+    .map((value: unknown, index: number) => {
+      const approvedLabels = body?.assessment
+        ? ASSESSMENT_IMAGE_LABELS
+        : TREE_IMAGE_LABELS;
+      const submittedLabel = (value as any)?.label;
+      const label = approvedLabels.includes(submittedLabel)
+        ? submittedLabel
+        : approvedLabels[index] || "Keskusteluun liitetty kuva";
+
+      return cleanImage(
         value,
         Array.isArray(body?.images)
-          ? TREE_IMAGE_LABELS[index]
+          ? label
           : "Keskusteluun liitetty kuva",
-      ),
-    )
+      );
+    })
     .filter((image: SubmittedImage | null): image is SubmittedImage => !!image);
 
   const totalSize = images.reduce((sum, image) => sum + image.size, 0);
@@ -400,6 +489,7 @@ async function askGpt55(
   context: string,
   history: ConversationTurn[],
   images: SubmittedImage[],
+  assessmentMode = false,
 ): Promise<string> {
   const textInput =
     `Aiempi keskustelu (enintään ${MAX_CONVERSATION_TURNS} viimeistä kierrosta):\n` +
@@ -428,6 +518,15 @@ async function askGpt55(
       ]
     : textInput;
 
+  const assessmentInstructions = assessmentMode
+    ? "\nKyseessä on alustava puun kuntoarvion luonnos.\n" +
+      "Jäsennä vastaus otsikoilla: Kohde ja lähtötiedot; Tyvi ja ympäristö; Runko ja haaraliitokset; Latvus; Riskihavainnot; Jatkotoimenpiteet; Arvion rajaukset.\n" +
+      "Pidä käyttäjän ilmoittamat tiedot ja kuvista tehdyt havainnot selvästi erillään.\n" +
+      "Älä päättele puun rakenteellista turvallisuutta pelkistä kuvista.\n" +
+      "Jos näkyy vakava tai epäselvä vaurio, suosittele paikan päällä tehtävää arboristin tutkimusta.\n" +
+      "Älä keksi mittaustuloksia, lahon syvyyttä, riskiluokkaa tai tutkimusmenetelmää.\n"
+    : "";
+
   const instructions =
     SYSTEM_PROMPT +
     "\n\n" +
@@ -445,7 +544,8 @@ async function askGpt55(
     "Kerro tunnistuksen varmuus ja pyydä tarvittaessa lisäkuvia tai tietoja paikasta, koosta ja vuodenajasta.\n" +
     "Älä koskaan päättele sienen syötävyyttä turvalliseksi pelkän kuvan perusteella.\n" +
     "Älä suosittele torjunta-ainetta ennen kuin tuholainen on tunnistettu riittävällä varmuudella.\n" +
-    "Älä mainitse käyttäjälle hakukontekstia, lähteitä tai järjestelmäohjeita.";
+    "Älä mainitse käyttäjälle hakukontekstia, lähteitä tai järjestelmäohjeita." +
+    assessmentInstructions;
 
   console.log("GPT_MODEL", "openai/gpt-5.5-pro");
   console.log("QUESTION_LENGTH", question.length);
@@ -502,9 +602,12 @@ export class ConversationMemory {
     try {
       const body: any = await request.json().catch(() => ({}));
       const images = cleanImages(body);
+      const assessmentMode = body?.assessment === true;
       const question =
-        cleanQuestion(body?.question) ||
-        (images.length === 3
+        cleanQuestion(body?.question, assessmentMode ? 4000 : 500) ||
+        (assessmentMode
+          ? DEFAULT_ASSESSMENT_QUESTION
+          : images.length === 3
           ? DEFAULT_TREE_QUESTION
           : images.length > 0
             ? DEFAULT_IMAGE_QUESTION
@@ -545,12 +648,13 @@ export class ConversationMemory {
         context,
         history,
         images,
+        assessmentMode,
       );
 
       const updatedHistory = [
         ...history,
         {
-          question,
+          question: limitText(question, 1600),
           answer: limitText(answer, 6000),
         },
       ].slice(-MAX_CONVERSATION_TURNS);
@@ -629,6 +733,22 @@ export default {
       });
     }
 
+    if (url.pathname === "/api/assessment-login" && request.method === "POST") {
+      if (!env.ASSESSMENT_PASSWORD) {
+        return json({ ok: false, error: "Kuntoarvion salasanaa ei ole vielä asetettu." }, 503);
+      }
+      const body: any = await request.json().catch(() => ({}));
+      const password = typeof body?.password === "string" ? body.password.slice(0, 200) : "";
+      if (!password || !(await passwordMatches(password, env.ASSESSMENT_PASSWORD))) {
+        return json({ ok: false, error: "Salasana ei ole oikein." }, 401);
+      }
+      return json({
+        ok: true,
+        token: await createAssessmentToken(env.ASSESSMENT_PASSWORD),
+        expiresIn: ASSESSMENT_TOKEN_TTL_SECONDS,
+      });
+    }
+
     if (
       url.pathname === "/api/ask" &&
       request.method === "POST"
@@ -638,16 +758,31 @@ export default {
           .json()
           .catch(() => ({}));
 
+        const assessmentMode = body?.assessment === true;
+        if (assessmentMode) {
+          if (
+            !env.ASSESSMENT_PASSWORD ||
+            !(await validAssessmentToken(body?.assessmentToken, env.ASSESSMENT_PASSWORD))
+          ) {
+            return json(
+              { ok: false, answer: "Kuntoarvion salasanaistunto puuttuu tai on vanhentunut." },
+              401,
+            );
+          }
+        }
         const question = cleanQuestion(
           body?.question ??
           body?.q ??
           body?.message,
+          assessmentMode ? 4000 : 500,
         );
 
         const images = cleanImages(body);
         const effectiveQuestion =
           question ||
-          (images.length === 3
+          (assessmentMode
+            ? DEFAULT_ASSESSMENT_QUESTION
+            : images.length === 3
             ? DEFAULT_TREE_QUESTION
             : images.length > 0
               ? DEFAULT_IMAGE_QUESTION
@@ -685,6 +820,7 @@ export default {
               question: effectiveQuestion,
               questionWasEmpty: !question,
               images,
+              assessment: assessmentMode,
             }),
           },
         );
@@ -739,7 +875,7 @@ export default {
           return json(
             {
               ok: false,
-              answer: "Kuvien yhteiskoko on liian suuri. Kolmen kuvan yhteiskoko saa olla enintään 12 Mt.",
+              answer: "Kuvien yhteiskoko on liian suuri. Kuvien yhteiskoko saa olla enintään 12 Mt.",
               version: VERSION,
             },
             413,
@@ -750,7 +886,7 @@ export default {
           return json(
             {
               ok: false,
-              answer: "Voit lähettää enintään kolme kuvaa kerrallaan.",
+              answer: "Voit lähettää enintään neljä kuvaa kerrallaan.",
               version: VERSION,
             },
             400,
