@@ -3,6 +3,7 @@
   "name": "ai-puuopas",
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-03",
+  "workers_dev": true,
 
   "routes": [
     {
