@@ -1,4 +1,10 @@
 import { SYSTEM_PROMPT } from "./prompt";
+import {
+  answerNeedsRepair,
+  createSafeAnswerStream,
+  extractFinalAnswer,
+  finalOutputDelta,
+} from "./answer-safety";
 
 export interface Env {
   ASSETS: Fetcher;
@@ -48,6 +54,12 @@ type ModelResult = {
   usage: ModelUsage;
 };
 
+type StreamedModelResult = {
+  answer: string;
+  usage: ModelUsage;
+  unsafe: boolean;
+};
+
 type PerformanceMetrics = {
   mode: string;
   streamed: boolean;
@@ -65,7 +77,7 @@ type PerformanceMetrics = {
   verified: boolean;
 };
 
-const VERSION = "0.16.1-site-link-compat";
+const VERSION = "0.16.2-language-guard";
 const SITE_LAUNCH_HOSTS = new Set(["jukipuu.fi", "www.jukipuu.fi"]);
 const SITE_LAUNCH_PATH = "/ai-puuopas/public";
 const LEGACY_WORKERS_DEV_HOST = "ai-puuopas.jukipuu-fi.workers.dev";
@@ -538,113 +550,7 @@ function limitText(value: unknown, max = 700): string {
 }
 
 function extractAnswer(response: any): string {
-  if (typeof response === "string") {
-    return response.trim();
-  }
-
-  const directCandidates = [
-    response?.output_text,
-    response?.response,
-    response?.answer,
-    response?.result?.output_text,
-    response?.result?.response,
-    response?.result?.answer,
-  ];
-
-  for (const candidate of directCandidates) {
-    if (
-      typeof candidate === "string" &&
-      candidate.trim().length > 0
-    ) {
-      return candidate.trim();
-    }
-  }
-
-  const outputArrays = [
-    response?.output,
-    response?.result?.output,
-  ];
-
-  for (const output of outputArrays) {
-    if (!Array.isArray(output)) {
-      continue;
-    }
-
-    const texts: string[] = [];
-
-    for (const item of output) {
-      if (typeof item?.text === "string" && item.text.trim()) {
-        texts.push(item.text.trim());
-      }
-
-      if (typeof item?.output_text === "string" && item.output_text.trim()) {
-        texts.push(item.output_text.trim());
-      }
-
-      if (!Array.isArray(item?.content)) {
-        continue;
-      }
-
-      for (const content of item.content) {
-        if (
-          typeof content?.text === "string" &&
-          content.text.trim().length > 0
-        ) {
-          texts.push(content.text.trim());
-        }
-
-        if (
-          typeof content?.output_text === "string" &&
-          content.output_text.trim().length > 0
-        ) {
-          texts.push(content.output_text.trim());
-        }
-
-        if (
-          typeof content?.value === "string" &&
-          content.value.trim().length > 0
-        ) {
-          texts.push(content.value.trim());
-        }
-      }
-    }
-
-    if (texts.length > 0) {
-      return texts.join("\n").trim();
-    }
-  }
-
-  const chatContent =
-    response?.choices?.[0]?.message?.content;
-
-  if (
-    typeof chatContent === "string" &&
-    chatContent.trim().length > 0
-  ) {
-    return chatContent.trim();
-  }
-
-  if (Array.isArray(chatContent)) {
-    const chatTexts = chatContent
-      .map((item: any) => {
-        if (typeof item === "string") {
-          return item;
-        }
-
-        if (typeof item?.text === "string") {
-          return item.text;
-        }
-
-        return "";
-      })
-      .filter((text: string) => text.trim().length > 0);
-
-    if (chatTexts.length > 0) {
-      return chatTexts.join("\n").trim();
-    }
-  }
-
-  return "";
+  return extractFinalAnswer(response);
 }
 
 function readableModelStream(response: any): ReadableStream<Uint8Array> | null {
@@ -657,28 +563,20 @@ function readableModelStream(response: any): ReadableStream<Uint8Array> | null {
 }
 
 function streamedDelta(payload: any): string {
-  if (
-    payload?.type === "response.output_text.delta" &&
-    typeof payload?.delta === "string"
-  ) {
-    return payload.delta;
-  }
-
-  if (typeof payload?.response === "string") return payload.response;
-
-  const chatDelta = payload?.choices?.[0]?.delta?.content;
-  return typeof chatDelta === "string" ? chatDelta : "";
+  return finalOutputDelta(payload);
 }
 
 async function consumeModelStream(
   response: any,
   onDelta: (delta: string) => void,
-): Promise<{ answer: string; usage: ModelUsage }> {
+): Promise<StreamedModelResult> {
+  const safeStream = createSafeAnswerStream(onDelta);
   const stream = readableModelStream(response);
   if (!stream) {
     const answer = extractAnswer(response);
-    if (answer) onDelta(answer);
-    return { answer, usage: extractUsage(response) };
+    if (answer) safeStream.push(answer);
+    const { unsafe } = safeStream.finish();
+    return { answer, usage: extractUsage(response), unsafe };
   }
 
   const reader = stream.getReader();
@@ -708,7 +606,7 @@ async function consumeModelStream(
       const delta = streamedDelta(payload);
       if (delta) {
         answer += delta;
-        onDelta(delta);
+        safeStream.push(delta);
       }
 
       if (payload?.type === "response.completed") {
@@ -740,10 +638,11 @@ async function consumeModelStream(
 
   if (!answer && completedAnswer) {
     answer = completedAnswer;
-    onDelta(answer);
+    safeStream.push(answer);
   }
 
-  return { answer: answer || completedAnswer, usage };
+  const { unsafe } = safeStream.finish();
+  return { answer: answer || completedAnswer, usage, unsafe };
 }
 
 async function getSmallRagContext(
@@ -870,6 +769,7 @@ async function askGpt56Sol(
   sessionAffinity = "",
   onVerification?: () => void,
   onDelta?: (delta: string) => void,
+  onReplace?: (answer: string) => void,
 ): Promise<ModelResult> {
   const textInput =
     `Aiempi keskustelu (enintään ${MAX_CONVERSATION_TURNS} viimeistä kierrosta):\n` +
@@ -1000,10 +900,45 @@ async function askGpt56Sol(
     );
   };
 
+  const runLanguageRepair = (draft: string) => {
+    const repairText =
+      "Kirjoita alla oleva luonnos kokonaan uudelleen suomeksi. Säilytä vain " +
+      "käyttäjälle hyödyllinen asiasisältö. Poista englanninkieliset osuudet, " +
+      "luonnostelu, sisäinen päättely ja vastauksen laatimista koskevat kommentit. " +
+      "Palauta vain valmis, selkeä ja tiivis käyttäjävastaus.\n\nLuonnos:\n" +
+      draft;
+    const repairInput = Array.isArray(input)
+      ? [
+          ...input,
+          {
+            role: "user",
+            content: [{ type: "input_text", text: repairText }],
+          },
+        ]
+      : `${textInput}\n\n${repairText}`;
+
+    return env.AI.run(
+      "openai/gpt-5.6-sol",
+      {
+        input: repairInput,
+        instructions,
+        max_output_tokens: assessmentMode ? 2500 : treeIdentification ? 800 : 1200,
+        reasoning: { effort: "medium" },
+      },
+      sessionAffinity
+        ? {
+            extraHeaders: {
+              "x-session-affinity": sessionAffinity,
+            },
+          }
+        : undefined,
+    );
+  };
+
   const firstStartedAt = Date.now();
   const shouldStreamFirstPass = !!onDelta && !treeIdentification;
   let response = await runModel("medium", "", shouldStreamFirstPass);
-  let streamed: { answer: string; usage: ModelUsage } | null = null;
+  let streamed: StreamedModelResult | null = null;
 
   if (shouldStreamFirstPass) {
     streamed = await consumeModelStream(response, onDelta!);
@@ -1028,6 +963,20 @@ async function askGpt56Sol(
     verificationMs = elapsedMs(verificationStartedAt);
     answer = extractAnswer(response);
     usage = addUsage(usage, extractUsage(response));
+  }
+
+  if (streamed?.unsafe || answerNeedsRepair(answer)) {
+    console.warn("ANSWER_LANGUAGE_REPAIR", true);
+    const repairStartedAt = Date.now();
+    const repairResponse = await runLanguageRepair(answer);
+    const repairedAnswer = extractAnswer(repairResponse);
+    verificationMs += elapsedMs(repairStartedAt);
+    usage = addUsage(usage, extractUsage(repairResponse));
+    answer = repairedAnswer && !answerNeedsRepair(repairedAnswer)
+      ? repairedAnswer
+      : "En saanut muodostettua riittävän varmaa suomenkielistä vastausta. " +
+        "Kokeile kysymystä uudelleen tai liitä yksi tarkka kuva kohteesta.";
+    onReplace?.(answer);
   }
 
   if (onDelta && treeIdentification && answer) onDelta(answer);
@@ -1415,6 +1364,7 @@ export default {
                       message: "Epävarma tunnistus tarkistetaan perusteellisemmin...",
                     }),
                     (delta) => emit("delta", { delta }),
+                    (answer) => emit("replace", { answer }),
                   );
 
                   const memoryWriteStartedAt = Date.now();

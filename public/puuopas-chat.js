@@ -559,6 +559,16 @@
         return;
       }
 
+      if (event === "replace" && typeof data.answer === "string") {
+        answer = data.answer;
+        if (renderDeltas) {
+          stopLoading();
+          answerPanel.style.display = "block";
+          answerText.textContent = answer;
+        }
+        return;
+      }
+
       if (event === "done") {
         result = { ...result, ...data };
         return;
