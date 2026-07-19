@@ -40,6 +40,18 @@ tiivistä vastausta. Yleiskuva käsitellään kevyemmin kuin lehti tai silmu ja
 runko. Jos ensimmäisen vastauksen varmuusarvio on epävarma, sama aineisto
 tarkistetaan automaattisesti high-päättelyllä.
 
+Versiosta 0.14 alkaen teksti- ja yhden kuvan vastaukset suoratoistetaan
+selaimelle niiden valmistuessa. Kolmen kuvan tunnistus näytetään vasta
+kokonaisena, jotta mahdollinen high-tarkistus ei vaihda käyttäjälle jo näytettyä
+lajipäätelmää. Kuvien data käsitellään varsinaisessa Workerissa; keskustelun
+Durable Object siirtää vain pienen tekstihistorian.
+
+AI Search käyttää nykyistä Workers binding -rajapintaa, kolmen tuloksen
+konservatiivista välimuistia ja keskustelukohtaista mallin session affinityä.
+Worker tallentaa Analytics Engineen vain tekniset suorituskykymittarit, kuten
+toimintatilan, vaiheiden kestot, tokenimäärät ja kuvien yhteiskoon. Kysymysten,
+vastausten tai kuvien sisältöä ei tallenneta analytiikkapisteisiin.
+
 ## Kuntoarvion raakaversio
 
 “Tee kuntoarvio” -kortti avaa JuKiPuun kuntoarviopohjaan perustuvan ohjatun
