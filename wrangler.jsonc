@@ -3,11 +3,24 @@
   "name": "ai-puuopas",
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-03",
-  "workers_dev": true,
+  "workers_dev": false,
+  "preview_urls": false,
 
   "routes": [
     {
-      "pattern": "jukipuu.fi/ai-puuopas/public*",
+      "pattern": "jukipuu.fi/ai-puuopas/public",
+      "zone_name": "jukipuu.fi"
+    },
+    {
+      "pattern": "jukipuu.fi/ai-puuopas/public/*",
+      "zone_name": "jukipuu.fi"
+    },
+    {
+      "pattern": "www.jukipuu.fi/ai-puuopas/public",
+      "zone_name": "jukipuu.fi"
+    },
+    {
+      "pattern": "www.jukipuu.fi/ai-puuopas/public/*",
       "zone_name": "jukipuu.fi"
     }
   ],
@@ -22,9 +35,29 @@
     "binding": "ASSETS",
     "run_worker_first": [
       "/api/*",
-      "/ai-puuopas/public*"
+      "/ai-puuopas/public",
+      "/ai-puuopas/public/*"
     ]
   },
+
+  "ratelimits": [
+    {
+      "name": "ASK_RATE_LIMITER",
+      "namespace_id": "719202601",
+      "simple": {
+        "limit": 12,
+        "period": 60
+      }
+    },
+    {
+      "name": "ASSESSMENT_RATE_LIMITER",
+      "namespace_id": "719202602",
+      "simple": {
+        "limit": 8,
+        "period": 60
+      }
+    }
+  ],
 
   "analytics_engine_datasets": [
     { "binding": "ANALYTICS_JUKIPUU", "dataset": "jukipuudataset" }
@@ -55,16 +88,5 @@
       "binding": "PUU_SEARCH",
       "instance_name": "hidden-dew-308f"
     }
-  ],
-
-  "r2_buckets": [
-    {
-      "binding": "r2jukipuu",
-      "bucket_name": "r2jukipuu"
-    }
-  ],
-
-  "images": {
-    "binding": "kuvat"
-  }
+  ]
 }

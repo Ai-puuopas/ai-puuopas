@@ -4,12 +4,16 @@ export interface Env {
   ASSETS: Fetcher;
   AI: any;
   PUU_SEARCH?: any;
-  r2jukipuu?: R2Bucket;
-  kuvat?: any;
   CONVERSATIONS: DurableObjectNamespace;
   ANALYTICS_JUKIPUU?: any;
   ASSESSMENT_PASSWORD?: string;
+  ASK_RATE_LIMITER?: RateLimitBinding;
+  ASSESSMENT_RATE_LIMITER?: RateLimitBinding;
 }
+
+type RateLimitBinding = {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+};
 
 type ConversationTurn = {
   question: string;
@@ -61,7 +65,7 @@ type PerformanceMetrics = {
   verified: boolean;
 };
 
-const VERSION = "0.15.0-site-launch";
+const VERSION = "0.16.0-cloudflare-hardening";
 const SITE_LAUNCH_HOSTS = new Set(["jukipuu.fi", "www.jukipuu.fi"]);
 const SITE_LAUNCH_PATH = "/ai-puuopas/public";
 const ASSESSMENT_TOKEN_TTL_SECONDS = 8 * 60 * 60;
@@ -107,6 +111,18 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Allow-Credentials": "true",
   "Access-Control-Expose-Headers": "Server-Timing, X-Conversation-Id, X-AI-Puuopas-Version",
+};
+
+const securityHeaders = {
+  "Content-Security-Policy":
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: blob:; connect-src 'self' https://jukipuu.fi; " +
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Permissions-Policy": "camera=(self), geolocation=(self), microphone=()",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "SAMEORIGIN",
 };
 
 function base64Url(bytes: Uint8Array): string {
@@ -187,10 +203,59 @@ function json(
     status,
     headers: {
       ...corsHeaders,
+      ...securityHeaders,
       "Content-Type": "application/json; charset=utf-8",
       ...extraHeaders,
     },
   });
+}
+
+function withSecurityHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(securityHeaders)) {
+    headers.set(name, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function clientRateLimitKey(request: Request, scope: string): string {
+  const forwarded = request.headers.get("CF-Connecting-IP") ||
+    request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ||
+    "anonymous";
+  return `${scope}:${forwarded}`;
+}
+
+async function rateLimitResponse(
+  request: Request,
+  binding: RateLimitBinding | undefined,
+  scope: string,
+): Promise<Response | null> {
+  if (!binding) return null;
+
+  try {
+    const result = await binding.limit({
+      key: clientRateLimitKey(request, scope),
+    });
+    if (result.success) return null;
+
+    console.warn("RATE_LIMITED", scope);
+    return json(
+      {
+        ok: false,
+        error: "Pyyntöjä tuli liian nopeasti. Odota hetki ja yritä uudelleen.",
+        version: VERSION,
+      },
+      429,
+      { "Retry-After": "60" },
+    );
+  } catch (error: any) {
+    console.warn("RATE_LIMIT_CHECK_ERROR", scope, error?.message || error);
+    return null;
+  }
 }
 
 function elapsedMs(startedAt: number): number {
@@ -695,11 +760,14 @@ async function getSmallRagContext(
       query: question,
       ai_search_options: {
         retrieval: {
+          retrieval_type: "hybrid",
+          match_threshold: 0.45,
           max_num_results: 3,
+          return_on_failure: true,
         },
         cache: {
           enabled: true,
-          cache_threshold: "super_strict_match",
+          cache_threshold: "close_enough",
         },
       },
     });
@@ -1154,7 +1222,10 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: corsHeaders,
+        headers: {
+          ...corsHeaders,
+          ...securityHeaders,
+        },
       });
     }
 
@@ -1167,14 +1238,21 @@ export default {
           assets: !!env.ASSETS,
           workersAI: !!env.AI,
           aiSearch: !!env.PUU_SEARCH,
-          r2: !!env.r2jukipuu,
-          images: !!env.kuvat,
           conversations: !!env.CONVERSATIONS,
+          askRateLimiter: !!env.ASK_RATE_LIMITER,
+          assessmentRateLimiter: !!env.ASSESSMENT_RATE_LIMITER,
         },
       });
     }
 
     if (url.pathname === "/api/assessment-login" && request.method === "POST") {
+      const limited = await rateLimitResponse(
+        request,
+        env.ASSESSMENT_RATE_LIMITER,
+        "assessment-login",
+      );
+      if (limited) return limited;
+
       if (!env.ASSESSMENT_PASSWORD) {
         return json({ ok: false, error: "Kuntoarvion salasanaa ei ole vielä asetettu." }, 503);
       }
@@ -1196,6 +1274,13 @@ export default {
     ) {
       const requestStartedAt = Date.now();
       try {
+        const limited = await rateLimitResponse(
+          request,
+          env.ASK_RATE_LIMITER,
+          "ask",
+        );
+        if (limited) return limited;
+
         const body: any = await parseAskBody(request);
 
         const assessmentMode = body?.assessment === true;
@@ -1359,6 +1444,7 @@ export default {
             status: 200,
             headers: {
               ...corsHeaders,
+              ...securityHeaders,
               "Content-Type": "text/event-stream; charset=utf-8",
               "Cache-Control": "no-store",
               "X-Conversation-Id": conversationId,
@@ -1500,6 +1586,6 @@ export default {
       }
     }
 
-    return env.ASSETS.fetch(routedRequest);
+    return withSecurityHeaders(await env.ASSETS.fetch(routedRequest));
   },
 };

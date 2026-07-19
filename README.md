@@ -8,8 +8,9 @@ Julkinen käyttöliittymä käynnistyy suoraan JuKiPuun sivustolta:
 
 Cloudflare Worker palvelee koko sovelluksen tämän sivustopolun kautta. Polun
 alla toimivat käyttöliittymä, kuvatunnistus, kuntoarvio ja API-kutsut samalla
-alkuperällä. Workers.dev-osoite säilyy teknisenä varayhteytenä ja
-terveystarkistuksia varten.
+alkuperällä. Julkinen workers.dev-osoite ja versioiden esikatseluosoitteet on
+poistettu käytöstä, jotta API toimii vain JuKiPuun WAF-suojatun sivustoreitin
+kautta.
 
 ## Kuvan liittäminen keskusteluun
 
@@ -51,8 +52,11 @@ kokonaisena, jotta mahdollinen high-tarkistus ei vaihda käyttäjälle jo näyte
 lajipäätelmää. Kuvien data käsitellään varsinaisessa Workerissa; keskustelun
 Durable Object siirtää vain pienen tekstihistorian.
 
-AI Search käyttää nykyistä Workers binding -rajapintaa, kolmen tuloksen
-konservatiivista välimuistia ja keskustelukohtaista mallin session affinityä.
+AI Search käyttää nykyistä Workers binding -rajapintaa, hybridihakua, kolmen
+tuloksen relevanssirajaa, läheisten kysymysten välimuistia ja
+keskustelukohtaista mallin session affinityä. Kalliita AI-kutsuja ja
+kuntoarvion kirjautumista suojaavat erilliset Cloudflare Rate Limiting
+-sidonnat.
 Worker tallentaa Analytics Engineen vain tekniset suorituskykymittarit, kuten
 toimintatilan, vaiheiden kestot, tokenimäärät ja kuvien yhteiskoon. Kysymysten,
 vastausten tai kuvien sisältöä ei tallenneta analytiikkapisteisiin.

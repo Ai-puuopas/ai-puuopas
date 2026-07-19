@@ -7,7 +7,7 @@
       location.pathname.startsWith(`${SITE_LAUNCH_PATH}/`));
   const WORKER_ORIGIN = ["localhost", "127.0.0.1"].includes(location.hostname)
     ? location.origin
-    : "https://ai-puuopas.jukipuu-fi.workers.dev";
+    : "https://jukipuu.fi/ai-puuopas/public";
   const API_ORIGIN = isSiteLaunch
     ? `${location.origin}${SITE_LAUNCH_PATH}`
     : WORKER_ORIGIN;
