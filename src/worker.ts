@@ -65,9 +65,11 @@ type PerformanceMetrics = {
   verified: boolean;
 };
 
-const VERSION = "0.16.0-cloudflare-hardening";
+const VERSION = "0.16.1-site-link-compat";
 const SITE_LAUNCH_HOSTS = new Set(["jukipuu.fi", "www.jukipuu.fi"]);
 const SITE_LAUNCH_PATH = "/ai-puuopas/public";
+const LEGACY_WORKERS_DEV_HOST = "ai-puuopas.jukipuu-fi.workers.dev";
+const CANONICAL_APP_URL = "https://jukipuu.fi/ai-puuopas/public/";
 const ASSESSMENT_TOKEN_TTL_SECONDS = 8 * 60 * 60;
 const CONVERSATION_COOKIE = "puuopas_conversation";
 const MAX_CONVERSATION_TURNS = 5;
@@ -1202,8 +1204,40 @@ export default {
     ctx: ExecutionContext,
   ): Promise<Response> {
     const incomingUrl = new URL(request.url);
+    const requestHostname = (
+      request.headers.get("Host") || incomingUrl.hostname
+    ).split(":", 1)[0].toLowerCase();
+    const isLegacyWorkersDevRequest =
+      requestHostname === LEGACY_WORKERS_DEV_HOST;
+
+    if (isLegacyWorkersDevRequest) {
+      const isRootNavigation =
+        incomingUrl.pathname === "/" &&
+        (request.method === "GET" || request.method === "HEAD");
+
+      if (isRootNavigation) {
+        return new Response(null, {
+          status: 308,
+          headers: {
+            ...securityHeaders,
+            "Cache-Control": "public, max-age=300",
+            "Location": CANONICAL_APP_URL,
+          },
+        });
+      }
+
+      return new Response("Not found", {
+        status: 404,
+        headers: {
+          ...securityHeaders,
+          "Cache-Control": "no-store",
+          "Content-Type": "text/plain; charset=utf-8",
+        },
+      });
+    }
+
     const isSiteLaunchRequest =
-      SITE_LAUNCH_HOSTS.has(incomingUrl.hostname) &&
+      SITE_LAUNCH_HOSTS.has(requestHostname) &&
       (incomingUrl.pathname === SITE_LAUNCH_PATH ||
         incomingUrl.pathname.startsWith(`${SITE_LAUNCH_PATH}/`));
 

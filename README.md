@@ -8,9 +8,10 @@ Julkinen käyttöliittymä käynnistyy suoraan JuKiPuun sivustolta:
 
 Cloudflare Worker palvelee koko sovelluksen tämän sivustopolun kautta. Polun
 alla toimivat käyttöliittymä, kuvatunnistus, kuntoarvio ja API-kutsut samalla
-alkuperällä. Julkinen workers.dev-osoite ja versioiden esikatseluosoitteet on
-poistettu käytöstä, jotta API toimii vain JuKiPuun WAF-suojatun sivustoreitin
-kautta.
+alkuperällä. Vanha workers.dev-juuriosoite ohjaa käyttäjän kanoniseen
+JuKiPuu-osoitteeseen, mutta sen API-reitit eivät ole käytettävissä.
+Versioiden esikatseluosoitteet on poistettu käytöstä, jotta API toimii vain
+JuKiPuun WAF-suojatun sivustoreitin kautta.
 
 ## Kuvan liittäminen keskusteluun
 
