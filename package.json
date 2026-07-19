@@ -1,8 +1,11 @@
 {
   "name": "ai-puuopas",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "devDependencies": {
     "wrangler": "^4.0.0"
   }
