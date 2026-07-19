@@ -13,8 +13,8 @@ Tiedosto `public/puuopas-chat.js` lisää nykyiseen keskustelukenttään:
 - kuvan liittämisen paste-komennolla (Ctrl/⌘ + V)
 - kuvapainikkeen ja esikatselun
 - kasvin, puun, sienen tai tuholaisen kuvatunnistuksen
-- “Tunnista puu” -kortille kolmen kuvan tunnistuksen: yleiskuva, runko ja
-  lehti tai silmu
+- “Tunnista puu” -kortille ohjatun kolmen kuvan tunnistuksen järjestyksessä:
+  lehti tai silmu, runko ja lopuksi yleiskuva
 - lähetyksen jälkeisen etenemisilmaisimen, kuluneen ajan ja arvion siitä, että
   tietojen haku ja tarkistus voi kestää noin 1–1,5 minuuttia
 - saman viiden keskustelukierroksen muistin myös sivujen välisissä API-kutsuissa
@@ -30,8 +30,10 @@ WebP-kuvat, joiden koko on enintään 5 Mt. Kolmen puukuvan yhteiskoko saa olla
 enintään 12 Mt. Kuvien sisältöä ei tallenneta keskustelumuistiin.
 
 Kolmen kuvan tunnistuksessa kaikki kuvapaikat täytetään ennen tunnistuksen
-käynnistämistä. AI käsittelee kuvat nimettyinä, vertailee tuntomerkkejä ja
-ilmoittaa todennäköisimmän lajin, vaihtoehdot sekä tunnistuksen varmuuden.
+käynnistämistä. GPT-5.6 Sol rajaa kandidaatit ensin lehden tai silmun avulla,
+karsii niitä rungon tuntomerkeillä ja käyttää yleiskuvaa lopullisena
+järkevyystarkistuksena. Epävarmassa tapauksessa AI pyytää yhden ratkaisevan
+lisäkuvan konkreettisella kuvausohjeella.
 
 ## Kuntoarvion raakaversio
 

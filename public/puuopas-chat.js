@@ -12,9 +12,18 @@
   const SUPPORTED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
   const STORAGE_KEY = "puuopasConversationId";
   const TREE_SLOTS = [
-    { title: "1. Yleiskuva", help: "Koko puu, latvus ja kasvutapa" },
-    { title: "2. Runko", help: "Kaarna mahdollisimman läheltä" },
-    { title: "3. Lehti tai silmu", help: "Tarkka lähikuva tuntomerkeistä" },
+    {
+      title: "1. Lehti tai silmu",
+      help: "Kuvaa yksi lehti suoraan tai silmu oksassa mahdollisimman tarkasti",
+    },
+    {
+      title: "2. Runko",
+      help: "Kuvaa kaarna rinnan korkeudelta niin, että rungon reunat hieman näkyvät",
+    },
+    {
+      title: "3. Yleiskuva",
+      help: "Siirry kauemmas ja kuvaa lopuksi koko puu sekä latvus",
+    },
   ];
 
   const form = document.querySelector(".search-card");
@@ -813,8 +822,8 @@
     panel.className = "puuopas-tree-panel";
     panel.setAttribute("aria-labelledby", "puuopasTreeTitle");
     panel.innerHTML =
-      '<h2 id="puuopasTreeTitle">Tunnista puu kolmesta kuvasta</h2>' +
-      '<p class="puuopas-tree-intro">Lisää yleiskuva, kuva rungosta ja kuva lehdestä tai silmusta. Voit valita kuvan tai liittää sen paste-komennolla.</p>' +
+      '<h2 id="puuopasTreeTitle">Tunnista puu ohjatusti kolmesta kuvasta</h2>' +
+      '<p class="puuopas-tree-intro">Aloita lehdestä tai silmusta, kuvaa seuraavaksi runko ja lopuksi koko puu. Sinun ei tarvitse itse tietää puun tuntomerkkejä – kuvausohjeet auttavat saamaan tunnistukseen sopivat kuvat.</p>' +
       '<div class="puuopas-tree-slots"></div>' +
       '<div class="puuopas-tree-actions">' +
         '<button type="button" class="puuopas-tree-submit" disabled>Tunnista puu</button>' +
@@ -925,9 +934,9 @@
 
       requestInProgress = true;
       identifyButton.disabled = true;
-      status.textContent = "Tunnistan puuta kolmesta kuvasta...";
+      status.textContent = "Tunnistan puuta vaiheittain kolmesta kuvasta...";
       const finishLoading = startLoading(
-        "Vertailen yleiskuvaa, runkoa ja lehteä tai silmua...",
+        "Rajaukseen käytetään ensin lehteä tai silmua...",
       );
       try {
         const data = await askApi({ images });
