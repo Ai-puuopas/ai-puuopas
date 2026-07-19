@@ -22,7 +22,7 @@ type SubmittedImage = {
   label: string;
 };
 
-const VERSION = "0.11.0-gpt-5.6-sol-tree-flow";
+const VERSION = "0.12.0-arborist-ai-approvals";
 const ASSESSMENT_TOKEN_TTL_SECONDS = 8 * 60 * 60;
 const CONVERSATION_COOKIE = "puuopas_conversation";
 const MAX_CONVERSATION_TURNS = 5;
@@ -521,9 +521,14 @@ async function askGpt56Sol(
     : textInput;
 
   const assessmentInstructions = assessmentMode
-    ? "\nKyseessä on alustava puun kuntoarvion luonnos.\n" +
+    ? "\nKyseessä on arboristin sisäiseen ammattikäyttöön tarkoitettu alustava puun kuntoarvion luonnos.\n" +
       "Jäsennä vastaus otsikoilla: Kohde ja lähtötiedot; Tyvi ja ympäristö; Runko ja haaraliitokset; Latvus; Riskihavainnot; Jatkotoimenpiteet; Arvion rajaukset.\n" +
-      "Pidä käyttäjän ilmoittamat tiedot ja kuvista tehdyt havainnot selvästi erillään.\n" +
+      "Käsittele lomakkeeseen kirjoitetut kommentit arboristin kirjaamina ammattihavaintoina ja säilytä niiden merkitys.\n" +
+      "Pidä arboristin kirjaamat havainnot, lähtötiedot ja kuvista tekemäsi AI-havainnot selvästi erillään.\n" +
+      "Älä lisää kuvasta päättelemääsi havaintoa, tulkintaa tai toimenpidesuositusta varsinaiseen luonnokseen varmana tietona.\n" +
+      "Kirjoita jokainen sellainen uusi AI:n ehdotus vastauksen loppuun omalle rivilleen täsmälleen muodossa: AI-EHDOTUS: ehdotuksen teksti.\n" +
+      "AI-EHDOTUS-rivillä saa olla vain yksi arboristin hyväksyttävä tai hylättävä asia. Älä käytä AI-EHDOTUS-etuliitettä muualla.\n" +
+      "Jos et tee yhtään uutta lisäystä arboristin tietoihin, älä kirjoita AI-EHDOTUS-rivejä.\n" +
       "Älä päättele puun rakenteellista turvallisuutta pelkistä kuvista.\n" +
       "Jos näkyy vakava tai epäselvä vaurio, suosittele paikan päällä tehtävää arboristin tutkimusta.\n" +
       "Älä keksi mittaustuloksia, lahon syvyyttä, riskiluokkaa tai tutkimusmenetelmää.\n"

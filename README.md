@@ -53,3 +53,9 @@ tonttirajaa.
 Luonnos näytetään tulostettavana raporttina, jonka ensimmäisellä sivulla on
 puun yleiskuva. Selaimen tulostustoiminnolla raportin voi tallentaa PDF:ksi.
 Luonnos ei korvaa paikan päällä tehtävää arboristin kuntoarviota.
+
+Kuntoarvio on salasanasuojattu arboristin sisäinen työkalu. Lomakkeeseen
+kirjoitetut kommentit käsitellään arboristin ammattihavaintoina. AI:n kuvista
+tekemät uudet tulkinnat ja lisäysehdotukset näytetään erillisinä Kyllä/Ei-
+valintoina. Vain arboristin Kyllä-valinnalla hyväksymät ehdotukset lisätään
+tulostettavaan raporttiin.

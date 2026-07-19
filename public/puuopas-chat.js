@@ -206,6 +206,21 @@
       background: #fff7df; border-left: 4px solid #d1a83a; margin-top: 22px;
       padding: 12px 14px;
     }
+    .puuopas-ai-review {
+      background: #f3f8f4; border: 1px solid #c7d8ca; border-radius: 14px;
+      display: none; margin-top: 22px; padding: 18px;
+    }
+    .puuopas-ai-review.is-visible { display: block; }
+    .puuopas-ai-review h3, .puuopas-ai-review > p { margin: 0 0 10px; }
+    .puuopas-ai-proposal {
+      background: #fff; border: 1px solid #d7e3d9; border-radius: 10px;
+      margin-top: 12px; padding: 14px;
+    }
+    .puuopas-ai-proposal legend { font-weight: 700; padding: 0 4px; }
+    .puuopas-ai-proposal p { margin: 4px 0 10px; }
+    .puuopas-ai-proposal label { margin-right: 18px; }
+    .puuopas-approved-additions { display: none; margin-top: 20px; }
+    .puuopas-approved-additions.is-visible { display: block; }
     .puuopas-report-actions { padding: 0 38px 32px; }
     .puuopas-loading {
       align-items: center; display: grid; gap: 12px; grid-template-columns: auto 1fr;
@@ -241,7 +256,7 @@
         top: 0; width: 100%;
       }
       .puuopas-report-cover { break-after: page; min-height: 100vh; }
-      .puuopas-report-actions { display: none; }
+      .puuopas-ai-review, .puuopas-report-actions { display: none !important; }
     }
   `;
   document.head.appendChild(styles);
@@ -502,9 +517,9 @@
       `Rungon ympärysmitta: ${value("circumference")}`,
       `Käytetyt tutkimusvälineet: ${value("tools")}`,
       `Mahdolliset vauriokohteet ja ympäristön kohteet: ${value("targets")}`,
-      `Tyvi ja ympäristö – käyttäjän havainnot: ${value("rootNotes")}`,
-      `Runko ja haaraliitokset – käyttäjän havainnot: ${value("trunkNotes")}`,
-      `Latvus – käyttäjän havainnot: ${value("crownNotes")}`,
+      `Tyvi ja ympäristö – arboristin havainnot: ${value("rootNotes")}`,
+      `Runko ja haaraliitokset – arboristin havainnot: ${value("trunkNotes")}`,
+      `Latvus – arboristin havainnot: ${value("crownNotes")}`,
     ].join("\n").slice(0, 4000);
   }
 
@@ -532,7 +547,80 @@
     image.alt = "Puun yleiskuva kuntoarvion kansisivulla";
     cover.append(title, species, date, location, coordinates, image);
 
-    report.querySelector(".puuopas-report-draft").textContent = answer;
+    const suggestionPattern = /^\s*AI-EHDOTUS:\s*(.+)\s*$/i;
+    const suggestions = [];
+    const draftLines = answer.split("\n").filter((line) => {
+      const match = line.match(suggestionPattern);
+      if (!match) return true;
+      suggestions.push(match[1].trim());
+      return false;
+    });
+    const cleanDraft = draftLines
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
+    report.querySelector(".puuopas-report-draft").textContent = cleanDraft;
+
+    const review = report.querySelector(".puuopas-ai-review");
+    const approved = report.querySelector(".puuopas-approved-additions");
+    review.textContent = "";
+    approved.textContent = "";
+    review.classList.toggle("is-visible", suggestions.length > 0);
+    approved.classList.remove("is-visible");
+
+    if (suggestions.length > 0) {
+      const reviewTitle = document.createElement("h3");
+      reviewTitle.textContent = "AI:n ehdolliset lisäykset";
+      const reviewIntro = document.createElement("p");
+      reviewIntro.textContent =
+        "Arboristi hyväksyy tai hylkää jokaisen AI:n ehdotuksen. Vain Kyllä-valinnat lisätään tulostettavaan raporttiin.";
+      review.append(reviewTitle, reviewIntro);
+
+      const updateApproved = () => {
+        const accepted = suggestions.filter((_, index) =>
+          review.querySelector(`input[name="aiProposal${index}"][value="yes"]`)?.checked,
+        );
+        approved.textContent = "";
+        approved.classList.toggle("is-visible", accepted.length > 0);
+        if (accepted.length === 0) return;
+        const heading = document.createElement("h3");
+        heading.textContent = "Arboristin hyväksymät AI-lisäykset";
+        const list = document.createElement("ul");
+        accepted.forEach((text) => {
+          const item = document.createElement("li");
+          item.textContent = text;
+          list.appendChild(item);
+        });
+        approved.append(heading, list);
+      };
+
+      suggestions.forEach((text, index) => {
+        const fieldset = document.createElement("fieldset");
+        fieldset.className = "puuopas-ai-proposal";
+        const legend = document.createElement("legend");
+        legend.textContent = `AI-ehdotus ${index + 1}`;
+        const proposal = document.createElement("p");
+        proposal.textContent = text;
+
+        [
+          ["yes", "Kyllä – lisää raporttiin"],
+          ["no", "Ei – hylkää"],
+        ].forEach(([optionValue, labelText]) => {
+          const label = document.createElement("label");
+          const radio = document.createElement("input");
+          radio.type = "radio";
+          radio.name = `aiProposal${index}`;
+          radio.value = optionValue;
+          radio.addEventListener("change", updateApproved);
+          label.append(radio, ` ${labelText}`);
+          fieldset.append(label);
+        });
+        fieldset.prepend(legend, proposal);
+        review.appendChild(fieldset);
+      });
+    }
+
     report.classList.add("is-visible");
     report.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -588,9 +676,9 @@
           '<div class="puuopas-assessment-field is-wide"><label>Käytetyt tutkimusvälineet<input name="tools" placeholder="Esim. silmämääräinen tarkastus ja mittanauha"></label></div>' +
           '<div class="puuopas-assessment-field is-wide"><label>Ympäristön kohteet ja mahdolliset vauriokohteet<textarea name="targets" placeholder="Rakennukset, kulkuväylät, leikkipaikat, ajoneuvot..."></textarea></label></div>' +
         '</div></section>' +
-        '<section class="puuopas-assessment-section"><h3>3. Tyvi ja ympäristö</h3><div class="puuopas-assessment-photo" data-assessment-photo="1" tabindex="0" role="button" aria-label="Lisää kuva tyvestä ja ympäristöstä"><div class="puuopas-assessment-photo-prompt"><strong>Tyven ja ympäristön kuva</strong><br><small>Valinnainen</small></div><img alt="Tyven ja ympäristön esikatselu"><button type="button" class="puuopas-assessment-photo-remove">Poista</button></div><div class="puuopas-assessment-field" style="margin-top:12px"><label>Omat havainnot<textarea name="rootNotes" placeholder="Juurenniska, maanpinta, halkeamat, käävät, vauriot..."></textarea></label></div></section>' +
-        '<section class="puuopas-assessment-section"><h3>4. Runko ja haaraliitokset</h3><div class="puuopas-assessment-photo" data-assessment-photo="2" tabindex="0" role="button" aria-label="Lisää kuva rungosta"><div class="puuopas-assessment-photo-prompt"><strong>Rungon ja haaraliitosten kuva</strong><br><small>Valinnainen</small></div><img alt="Rungon esikatselu"><button type="button" class="puuopas-assessment-photo-remove">Poista</button></div><div class="puuopas-assessment-field" style="margin-top:12px"><label>Omat havainnot<textarea name="trunkNotes" placeholder="Haarautuminen, halkeamat, ontelot, nestevuodot, lahottajat..."></textarea></label></div></section>' +
-        '<section class="puuopas-assessment-section"><h3>5. Latvus</h3><div class="puuopas-assessment-photo" data-assessment-photo="3" tabindex="0" role="button" aria-label="Lisää kuva latvuksesta"><div class="puuopas-assessment-photo-prompt"><strong>Latvuksen kuva</strong><br><small>Valinnainen</small></div><img alt="Latvuksen esikatselu"><button type="button" class="puuopas-assessment-photo-remove">Poista</button></div><div class="puuopas-assessment-field" style="margin-top:12px"><label>Omat havainnot<textarea name="crownNotes" placeholder="Elinvoima, kuolleet oksat, epätasapaino, aikaisemmat leikkaukset..."></textarea></label></div></section>' +
+        '<section class="puuopas-assessment-section"><h3>3. Tyvi ja ympäristö</h3><div class="puuopas-assessment-photo" data-assessment-photo="1" tabindex="0" role="button" aria-label="Lisää kuva tyvestä ja ympäristöstä"><div class="puuopas-assessment-photo-prompt"><strong>Tyven ja ympäristön kuva</strong><br><small>Valinnainen</small></div><img alt="Tyven ja ympäristön esikatselu"><button type="button" class="puuopas-assessment-photo-remove">Poista</button></div><div class="puuopas-assessment-field" style="margin-top:12px"><label>Arboristin havainnot<textarea name="rootNotes" placeholder="Juurenniska, maanpinta, halkeamat, käävät, vauriot..."></textarea></label></div></section>' +
+        '<section class="puuopas-assessment-section"><h3>4. Runko ja haaraliitokset</h3><div class="puuopas-assessment-photo" data-assessment-photo="2" tabindex="0" role="button" aria-label="Lisää kuva rungosta"><div class="puuopas-assessment-photo-prompt"><strong>Rungon ja haaraliitosten kuva</strong><br><small>Valinnainen</small></div><img alt="Rungon esikatselu"><button type="button" class="puuopas-assessment-photo-remove">Poista</button></div><div class="puuopas-assessment-field" style="margin-top:12px"><label>Arboristin havainnot<textarea name="trunkNotes" placeholder="Haarautuminen, halkeamat, ontelot, nestevuodot, lahottajat..."></textarea></label></div></section>' +
+        '<section class="puuopas-assessment-section"><h3>5. Latvus</h3><div class="puuopas-assessment-photo" data-assessment-photo="3" tabindex="0" role="button" aria-label="Lisää kuva latvuksesta"><div class="puuopas-assessment-photo-prompt"><strong>Latvuksen kuva</strong><br><small>Valinnainen</small></div><img alt="Latvuksen esikatselu"><button type="button" class="puuopas-assessment-photo-remove">Poista</button></div><div class="puuopas-assessment-field" style="margin-top:12px"><label>Arboristin havainnot<textarea name="crownNotes" placeholder="Elinvoima, kuolleet oksat, epätasapaino, aikaisemmat leikkaukset..."></textarea></label></div></section>' +
         '<div class="puuopas-assessment-actions"><button type="submit" class="puuopas-assessment-submit" disabled>Luo kuntoarvion raakaversio</button><span class="puuopas-assessment-status" aria-live="polite">Yleiskuva puuttuu</span></div>' +
       '</form>';
     cards.insertAdjacentElement("afterend", panel);
@@ -600,6 +688,8 @@
     report.innerHTML =
       '<div class="puuopas-report-cover"></div>' +
       '<div class="puuopas-report-body"><h2>Kuntoarvion luonnos</h2><pre class="puuopas-report-draft"></pre>' +
+        '<section class="puuopas-ai-review" aria-live="polite"></section>' +
+        '<section class="puuopas-approved-additions"></section>' +
         '<div class="puuopas-report-disclaimer"><strong>Rajaus:</strong> Tämä on kuvien ja annettujen tietojen perusteella laadittu alustava luonnos. Se ei korvaa paikan päällä tehtävää arboristin kuntoarviota.</div></div>' +
       '<div class="puuopas-report-actions"><button type="button" class="puuopas-report-print">Tulosta tai tallenna PDF</button></div>';
     panel.insertAdjacentElement("afterend", report);
