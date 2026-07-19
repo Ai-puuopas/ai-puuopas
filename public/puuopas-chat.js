@@ -1,11 +1,18 @@
 (function () {
   "use strict";
 
+  const SITE_LAUNCH_PATH = "/ai-puuopas/public";
+  const isSiteLaunch = ["jukipuu.fi", "www.jukipuu.fi"].includes(location.hostname) &&
+    (location.pathname === SITE_LAUNCH_PATH ||
+      location.pathname.startsWith(`${SITE_LAUNCH_PATH}/`));
   const WORKER_ORIGIN = ["localhost", "127.0.0.1"].includes(location.hostname)
     ? location.origin
-    : "https://ai-puuopas.jukipuu-fi.workers.dev";
-  const API_URL = `${WORKER_ORIGIN}/api/ask`;
-  const ASSESSMENT_LOGIN_URL = `${WORKER_ORIGIN}/api/assessment-login`;
+    : "https://jukipuu.fi/ai-puuopas/public";
+  const API_ORIGIN = isSiteLaunch
+    ? `${location.origin}${SITE_LAUNCH_PATH}`
+    : WORKER_ORIGIN;
+  const API_URL = `${API_ORIGIN}/api/ask`;
+  const ASSESSMENT_LOGIN_URL = `${API_ORIGIN}/api/assessment-login`;
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
   const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
   const MAX_IMAGE_EDGE = 1600;
@@ -429,17 +436,160 @@
     return id;
   }
 
-  async function askApi(payload) {
+  function dataUrlToBlob(dataUrl) {
+    const [header, base64 = ""] = dataUrl.split(",", 2);
+    const mimeType = header.match(/^data:([^;]+);base64$/)?.[1] || "";
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: mimeType });
+  }
+
+  function buildAskRequest(payload) {
+    const submitted = Array.isArray(payload.images)
+      ? payload.images
+      : payload.image
+        ? [payload.image]
+        : [];
+
+    if (submitted.length === 0) {
+      return {
+        body: JSON.stringify({ ...payload, conversationId: getConversationId() }),
+        contentType: "application/json",
+      };
+    }
+
+    const metadata = { ...payload, conversationId: getConversationId() };
+    delete metadata.image;
+    delete metadata.images;
+    metadata.imageMode = Array.isArray(payload.images) ? "multiple" : "single";
+    metadata.imageDescriptors = [];
+
+    const form = new FormData();
+    submitted.forEach((image, index) => {
+      if (!image?.dataUrl) return;
+      const blob = dataUrlToBlob(image.dataUrl);
+      const extension = blob.type === "image/png"
+        ? "png"
+        : blob.type === "image/webp"
+          ? "webp"
+          : "jpg";
+      metadata.imageDescriptors.push({ index, label: image.label || "" });
+      form.append(`image-${index}`, blob, `image-${index + 1}.${extension}`);
+    });
+    form.append("metadata", JSON.stringify(metadata));
+
+    return { body: form, contentType: "" };
+  }
+
+  async function askApi(payload, options = {}) {
+    const useStream = options.stream ?? payload.assessment !== true;
+    const renderDeltas = options.renderDeltas ?? useStream;
+    const requestBody = buildAskRequest(payload);
+    const headers = {
+      Accept: useStream ? "text/event-stream" : "application/json",
+    };
+    if (requestBody.contentType) headers["Content-Type"] = requestBody.contentType;
     const response = await fetch(API_URL, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...payload, conversationId: getConversationId() }),
+      headers,
+      body: requestBody.body,
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.answer || data.error || "API ei vastannut oikein");
-    if (data.conversationId) localStorage.setItem(STORAGE_KEY, data.conversationId);
-    return data;
+
+    const contentType = response.headers.get("Content-Type") || "";
+    if (!contentType.includes("text/event-stream")) {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.answer || data.error || "API ei vastannut oikein");
+      if (data.conversationId) localStorage.setItem(STORAGE_KEY, data.conversationId);
+      return data;
+    }
+
+    if (!response.ok || !response.body) {
+      throw new Error("API ei avannut vastausvirtaa oikein");
+    }
+
+    const responseConversationId = response.headers.get("X-Conversation-Id");
+    if (responseConversationId) {
+      localStorage.setItem(STORAGE_KEY, responseConversationId);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let answer = "";
+    let result = { conversationId: responseConversationId || getConversationId() };
+    let streamError = "";
+
+    function processEvent(eventText) {
+      const event = eventText
+        .split(/\r?\n/)
+        .find((line) => line.startsWith("event:"))
+        ?.slice(6)
+        .trim() || "message";
+      const dataText = eventText
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (!dataText) return;
+
+      let data;
+      try {
+        data = JSON.parse(dataText);
+      } catch {
+        return;
+      }
+
+      if (event === "phase") {
+        const phase = answerText.querySelector(".puuopas-loading-phase");
+        if (phase && data.message) phase.textContent = data.message;
+        return;
+      }
+
+      if (event === "delta" && typeof data.delta === "string") {
+        answer += data.delta;
+        if (renderDeltas) {
+          stopLoading();
+          answerPanel.style.display = "block";
+          answerText.textContent = answer;
+        }
+        return;
+      }
+
+      if (event === "done") {
+        result = { ...result, ...data };
+        return;
+      }
+
+      if (event === "error") {
+        streamError = data.message || "AI-puuopas ei saanut vastausta juuri nyt.";
+      }
+    }
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let boundary = buffer.search(/\r?\n\r?\n/);
+      while (boundary >= 0) {
+        const eventText = buffer.slice(0, boundary);
+        const separator = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0] || "\n\n";
+        buffer = buffer.slice(boundary + separator.length);
+        processEvent(eventText);
+        boundary = buffer.search(/\r?\n\r?\n/);
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) processEvent(buffer);
+    if (streamError) throw new Error(streamError);
+    if (!answer) throw new Error("AI-puuopas palautti tyhjän vastauksen.");
+
+    return { ...result, answer };
   }
 
   attachButton.addEventListener("click", () => fileInput.click());

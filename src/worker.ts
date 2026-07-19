@@ -4,11 +4,16 @@ export interface Env {
   ASSETS: Fetcher;
   AI: any;
   PUU_SEARCH?: any;
-  r2jukipuu?: R2Bucket;
-  kuvat?: any;
   CONVERSATIONS: DurableObjectNamespace;
+  ANALYTICS_JUKIPUU?: any;
   ASSESSMENT_PASSWORD?: string;
+  ASK_RATE_LIMITER?: RateLimitBinding;
+  ASSESSMENT_RATE_LIMITER?: RateLimitBinding;
 }
+
+type RateLimitBinding = {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+};
 
 type ConversationTurn = {
   question: string;
@@ -22,7 +27,47 @@ type SubmittedImage = {
   label: string;
 };
 
-const VERSION = "0.13.0-fast-tree-identification";
+type RagResult = {
+  context: string;
+  durationMs: number;
+  matchCount: number;
+};
+
+type ModelUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cachedTokens: number;
+};
+
+type ModelResult = {
+  answer: string;
+  firstPassMs: number;
+  verificationMs: number;
+  verified: boolean;
+  usage: ModelUsage;
+};
+
+type PerformanceMetrics = {
+  mode: string;
+  streamed: boolean;
+  totalMs: number;
+  memoryReadMs: number;
+  ragMs: number;
+  firstPassMs: number;
+  verificationMs: number;
+  memoryWriteMs: number;
+  imageBytes: number;
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cachedTokens: number;
+  verified: boolean;
+};
+
+const VERSION = "0.16.0-cloudflare-hardening";
+const SITE_LAUNCH_HOSTS = new Set(["jukipuu.fi", "www.jukipuu.fi"]);
+const SITE_LAUNCH_PATH = "/ai-puuopas/public";
 const ASSESSMENT_TOKEN_TTL_SECONDS = 8 * 60 * 60;
 const CONVERSATION_COOKIE = "puuopas_conversation";
 const MAX_CONVERSATION_TURNS = 5;
@@ -65,6 +110,19 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Allow-Credentials": "true",
+  "Access-Control-Expose-Headers": "Server-Timing, X-Conversation-Id, X-AI-Puuopas-Version",
+};
+
+const securityHeaders = {
+  "Content-Security-Policy":
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data: blob:; connect-src 'self' https://jukipuu.fi; " +
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Permissions-Policy": "camera=(self), geolocation=(self), microphone=()",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "SAMEORIGIN",
 };
 
 function base64Url(bytes: Uint8Array): string {
@@ -145,10 +203,145 @@ function json(
     status,
     headers: {
       ...corsHeaders,
+      ...securityHeaders,
       "Content-Type": "application/json; charset=utf-8",
       ...extraHeaders,
     },
   });
+}
+
+function withSecurityHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(securityHeaders)) {
+    headers.set(name, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function clientRateLimitKey(request: Request, scope: string): string {
+  const forwarded = request.headers.get("CF-Connecting-IP") ||
+    request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ||
+    "anonymous";
+  return `${scope}:${forwarded}`;
+}
+
+async function rateLimitResponse(
+  request: Request,
+  binding: RateLimitBinding | undefined,
+  scope: string,
+): Promise<Response | null> {
+  if (!binding) return null;
+
+  try {
+    const result = await binding.limit({
+      key: clientRateLimitKey(request, scope),
+    });
+    if (result.success) return null;
+
+    console.warn("RATE_LIMITED", scope);
+    return json(
+      {
+        ok: false,
+        error: "Pyyntöjä tuli liian nopeasti. Odota hetki ja yritä uudelleen.",
+        version: VERSION,
+      },
+      429,
+      { "Retry-After": "60" },
+    );
+  } catch (error: any) {
+    console.warn("RATE_LIMIT_CHECK_ERROR", scope, error?.message || error);
+    return null;
+  }
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Date.now() - startedAt);
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function extractUsage(response: any): ModelUsage {
+  const usage = response?.usage ?? response?.result?.usage ?? {};
+  const inputDetails = usage?.input_tokens_details ?? {};
+  const outputDetails = usage?.output_tokens_details ?? {};
+
+  return {
+    inputTokens: numberValue(usage?.input_tokens),
+    outputTokens: numberValue(usage?.output_tokens),
+    reasoningTokens: numberValue(outputDetails?.reasoning_tokens),
+    cachedTokens: numberValue(inputDetails?.cached_tokens),
+  };
+}
+
+function addUsage(left: ModelUsage, right: ModelUsage): ModelUsage {
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    reasoningTokens: left.reasoningTokens + right.reasoningTokens,
+    cachedTokens: left.cachedTokens + right.cachedTokens,
+  };
+}
+
+function requestMode(assessmentMode: boolean, images: SubmittedImage[]): string {
+  if (assessmentMode) return "assessment";
+  if (images.length === 3) return "tree-identification";
+  if (images.length > 0) return "single-image";
+  return "text";
+}
+
+function serverTiming(metrics: Partial<PerformanceMetrics>): string {
+  const timings: Array<[string, number | undefined]> = [
+    ["memory-read", metrics.memoryReadMs],
+    ["rag", metrics.ragMs],
+    ["model", metrics.firstPassMs],
+    ["verification", metrics.verificationMs],
+    ["memory-write", metrics.memoryWriteMs],
+    ["total", metrics.totalMs],
+  ];
+
+  return timings
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+    .map(([name, duration]) => `${name};dur=${Math.max(0, Math.round(duration))}`)
+    .join(", ");
+}
+
+function recordPerformance(env: Env, metrics: PerformanceMetrics): void {
+  console.log("PERFORMANCE_METRICS", JSON.stringify(metrics));
+
+  try {
+    env.ANALYTICS_JUKIPUU?.writeDataPoint({
+      blobs: [VERSION, metrics.mode, metrics.streamed ? "stream" : "json"],
+      doubles: [
+        metrics.totalMs,
+        metrics.memoryReadMs,
+        metrics.ragMs,
+        metrics.firstPassMs,
+        metrics.verificationMs,
+        metrics.memoryWriteMs,
+        metrics.imageBytes,
+        metrics.inputTokens,
+        metrics.outputTokens,
+        metrics.reasoningTokens,
+        metrics.cachedTokens,
+        metrics.verified ? 1 : 0,
+      ],
+      indexes: [metrics.mode],
+    });
+  } catch (error: any) {
+    console.warn("ANALYTICS_WRITE_ERROR", error?.message || error);
+  }
+}
+
+function sseEvent(event: string, data: unknown): Uint8Array {
+  return new TextEncoder().encode(
+    `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+  );
 }
 
 function getConversationId(request: Request): string {
@@ -272,6 +465,65 @@ function cleanImages(body: any): SubmittedImage[] {
   return images;
 }
 
+function bufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+
+  return btoa(binary);
+}
+
+async function parseAskBody(request: Request): Promise<any> {
+  const contentType = request.headers.get("Content-Type") || "";
+  if (!contentType.includes("multipart/form-data")) {
+    return request.json().catch(() => ({}));
+  }
+
+  const form = await request.formData();
+  const metadataText = form.get("metadata");
+  const body = typeof metadataText === "string"
+    ? JSON.parse(metadataText)
+    : {};
+  const descriptors = Array.isArray(body?.imageDescriptors)
+    ? body.imageDescriptors
+    : [];
+  const images: any[] = [];
+  let totalSize = 0;
+
+  for (const descriptor of descriptors.slice(0, MAX_IMAGES)) {
+    const index = Number(descriptor?.index);
+    if (!Number.isInteger(index) || index < 0 || index >= MAX_IMAGES) continue;
+    const value: any = form.get(`image-${index}`);
+    if (!value || typeof value.arrayBuffer !== "function") continue;
+
+    const size = numberValue(value.size);
+    if (size <= 0 || size > MAX_IMAGE_BYTES) throw new Error("IMAGE_TOO_LARGE");
+    totalSize += size;
+    if (totalSize > MAX_TOTAL_IMAGE_BYTES) throw new Error("IMAGES_TOO_LARGE");
+
+    const mimeType = typeof value.type === "string" ? value.type : "";
+    if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) throw new Error("UNSUPPORTED_IMAGE");
+    images[index] = {
+      dataUrl: `data:${mimeType};base64,${bufferToBase64(await value.arrayBuffer())}`,
+      mimeType,
+      label: descriptor?.label,
+    };
+  }
+
+  delete body.imageDescriptors;
+  if (body?.imageMode === "single") {
+    body.image = images.find(Boolean) ?? null;
+  } else {
+    body.images = images;
+  }
+  delete body.imageMode;
+  return body;
+}
+
 function limitText(value: unknown, max = 700): string {
   if (typeof value !== "string") {
     return "";
@@ -393,28 +645,139 @@ function extractAnswer(response: any): string {
   return "";
 }
 
+function readableModelStream(response: any): ReadableStream<Uint8Array> | null {
+  if (response instanceof Response) return response.body;
+  if (response?.body && typeof response.body.getReader === "function") {
+    return response.body;
+  }
+  if (response && typeof response.getReader === "function") return response;
+  return null;
+}
+
+function streamedDelta(payload: any): string {
+  if (
+    payload?.type === "response.output_text.delta" &&
+    typeof payload?.delta === "string"
+  ) {
+    return payload.delta;
+  }
+
+  if (typeof payload?.response === "string") return payload.response;
+
+  const chatDelta = payload?.choices?.[0]?.delta?.content;
+  return typeof chatDelta === "string" ? chatDelta : "";
+}
+
+async function consumeModelStream(
+  response: any,
+  onDelta: (delta: string) => void,
+): Promise<{ answer: string; usage: ModelUsage }> {
+  const stream = readableModelStream(response);
+  if (!stream) {
+    const answer = extractAnswer(response);
+    if (answer) onDelta(answer);
+    return { answer, usage: extractUsage(response) };
+  }
+
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let answer = "";
+  let completedAnswer = "";
+  let usage: ModelUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cachedTokens: 0,
+  };
+
+  const processEvent = (eventText: string) => {
+    const dataText = eventText
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n")
+      .trim();
+
+    if (!dataText || dataText === "[DONE]") return;
+
+    try {
+      const payload = JSON.parse(dataText);
+      const delta = streamedDelta(payload);
+      if (delta) {
+        answer += delta;
+        onDelta(delta);
+      }
+
+      if (payload?.type === "response.completed") {
+        completedAnswer = extractAnswer(payload?.response);
+        usage = extractUsage(payload?.response);
+      }
+    } catch {
+      // Unknown SSE metadata is ignored; the completed response remains authoritative.
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary = buffer.search(/\r?\n\r?\n/);
+    while (boundary >= 0) {
+      const eventText = buffer.slice(0, boundary);
+      const separator = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0] ?? "\n\n";
+      buffer = buffer.slice(boundary + separator.length);
+      processEvent(eventText);
+      boundary = buffer.search(/\r?\n\r?\n/);
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) processEvent(buffer);
+
+  if (!answer && completedAnswer) {
+    answer = completedAnswer;
+    onDelta(answer);
+  }
+
+  return { answer: answer || completedAnswer, usage };
+}
+
 async function getSmallRagContext(
   env: Env,
   question: string,
-): Promise<string> {
+): Promise<RagResult> {
+  const startedAt = Date.now();
+
   if (!env.PUU_SEARCH) {
     console.warn("RAG_SEARCH_SKIPPED", "PUU_SEARCH binding missing");
-    return "";
+    return { context: "", durationMs: 0, matchCount: 0 };
   }
 
   try {
-    const result = await env.PUU_SEARCH.search(question, {
-      topK: 3,
+    const result = await env.PUU_SEARCH.search({
+      query: question,
+      ai_search_options: {
+        retrieval: {
+          retrieval_type: "hybrid",
+          match_threshold: 0.45,
+          max_num_results: 3,
+          return_on_failure: true,
+        },
+        cache: {
+          enabled: true,
+          cache_threshold: "close_enough",
+        },
+      },
     });
 
-    console.log(
-      "RAG_RAW_RESULT",
-      JSON.stringify(result).slice(0, 6000),
-    );
-
-    const matches = Array.isArray(result?.matches)
-      ? result.matches
-      : [];
+    const matches =
+      (Array.isArray(result?.chunks) && result.chunks) ||
+      (Array.isArray(result?.matches) && result.matches) ||
+      (Array.isArray(result?.result?.chunks) && result.result.chunks) ||
+      (Array.isArray(result?.result?.matches) && result.result.matches) ||
+      [];
 
     const contextParts = matches
       .slice(0, 3)
@@ -422,6 +785,8 @@ async function getSmallRagContext(
         const title =
           item?.metadata?.title ??
           item?.metadata?.source ??
+          item?.item?.metadata?.title ??
+          item?.item?.key ??
           item?.title ??
           `Hakutulos ${index + 1}`;
 
@@ -452,7 +817,11 @@ async function getSmallRagContext(
     console.log("RAG_MATCH_COUNT", matches.length);
     console.log("RAG_CONTEXT_LENGTH", context.length);
 
-    return context;
+    return {
+      context,
+      durationMs: elapsedMs(startedAt),
+      matchCount: matches.length,
+    };
   } catch (error: any) {
     console.error(
       "RAG_SEARCH_ERROR",
@@ -464,7 +833,11 @@ async function getSmallRagContext(
       error?.stack || "",
     );
 
-    return "";
+    return {
+      context: "",
+      durationMs: elapsedMs(startedAt),
+      matchCount: 0,
+    };
   }
 }
 
@@ -492,7 +865,10 @@ async function askGpt56Sol(
   history: ConversationTurn[],
   images: SubmittedImage[],
   assessmentMode = false,
-): Promise<string> {
+  sessionAffinity = "",
+  onVerification?: () => void,
+  onDelta?: (delta: string) => void,
+): Promise<ModelResult> {
   const textInput =
     `Aiempi keskustelu (enintään ${MAX_CONVERSATION_TURNS} viimeistä kierrosta):\n` +
     `${formatConversationHistory(history)}\n\n` +
@@ -550,9 +926,11 @@ async function askGpt56Sol(
     "Jos hakukonteksti ei sisällä vastausta, voit käyttää luotettavaa yleistä puutietoa.\n" +
     "Jos et ole varma, kerro epävarmuudesta avoimesti.\n" +
     "Kun mukana on kuva, erottele näkyvät havainnot ja todennäköinen tunnistus.\n" +
-    "Kun mukana on kolme nimettyä puukuvaa, etene aina järjestyksessä: 1) lehti tai silmu rajaa lajikandidaatit, 2) runko ja kaarna karsivat kandidaatteja, 3) yleiskuva tarkistaa kasvutavan, haarautumisen ja latvuksen sopivuuden.\n" +
+    "Kun mukana on kolme nimettyä puukuvaa, jäsennä vastaus järjestyksessä: 1) Lehden tai silmun näkyvät havainnot, 2) Rungon ja kaarnan näkyvät havainnot, 3) Yleiskuvan järkevyystarkistus, 4) Kokonaispäätelmä.\n" +
+    "Rajaa lajikandidaatit lehden tai silmun perusteella, karsi niitä rungon ja kaarnan tuntomerkeillä ja käytä yleiskuvaa vain kasvutavan, haarautumisen ja latvuksen sopivuuden tarkistamiseen.\n" +
     "Älä anna yleiskuvalle suurempaa painoa kuin selvästi näkyville lehden, silmun tai kaarnan tuntomerkeille.\n" +
     "Vertaa lähilajeja nimenomaan niiden erottavien tuntomerkkien avulla. Älä nosta varmuutta vain siksi, että kaikki kolme kuvaa on toimitettu.\n" +
+    "Jos kuvien tuntomerkit ovat keskenään ristiriidassa, kerro että kuvat saattavat olla eri puuyksilöistä äläkä tee väkisin yhtä lajitunnistusta.\n" +
     "Kolmen puukuvan vastauksessa anna tiiviisti: 3–5 ratkaisevaa näkyvää tuntomerkkiä, todennäköisin puulaji, enintään kaksi vaihtoehtoa sekä täsmälleen muodossa 'Varmuusarvio: varma', 'Varmuusarvio: todennäköinen' tai 'Varmuusarvio: epävarma'.\n" +
     "Jos lajitason tunnistus ei ole perusteltu, ilmoita suku tai lajiryhmä. Pyydä silloin vain yksi ratkaisevin lisäkuva ja anna kuvaajalle konkreettinen kuvausohje ilman kasvitieteellisen erityisosaamisen vaatimusta.\n" +
     "Kerro tunnistuksen varmuus ja pyydä tarvittaessa lisäkuvia tai tietoja paikasta, koosta ja vuodenajasta.\n" +
@@ -573,51 +951,104 @@ async function askGpt56Sol(
   );
   console.log("INSTRUCTIONS_LENGTH", instructions.length);
 
-  const runModel = (effort: "medium" | "high", extraInstructions = "") =>
-    env.AI.run("openai/gpt-5.6-sol", {
-      input,
-      instructions: instructions + extraInstructions,
-      max_output_tokens: treeIdentification ? 800 : 2500,
-      reasoning: {
-        effort: assessmentMode || (!treeIdentification && images.length > 0)
-          ? "high"
-          : effort,
+  const runModel = (
+    effort: "medium" | "high",
+    firstAnswer = "",
+    stream = false,
+  ) => {
+    const modelInput = firstAnswer && Array.isArray(input)
+      ? [
+          ...input,
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text:
+                  "Ensimmäinen arvio jäi epävarmaksi. Arvioi se kriittisesti ja " +
+                  "tee perusteellisempi lähilajien vertailu samoista kuvista. " +
+                  "Pidä vastaus edelleen tiiviinä. Ensimmäinen arvio oli:\n" +
+                  firstAnswer,
+              },
+            ],
+          },
+        ]
+      : input;
+
+    return env.AI.run(
+      "openai/gpt-5.6-sol",
+      {
+        input: modelInput,
+        instructions,
+        max_output_tokens: treeIdentification ? 800 : 2500,
+        reasoning: {
+          effort: assessmentMode || (!treeIdentification && images.length > 0)
+            ? "high"
+            : effort,
+        },
+        ...(stream ? { stream: true } : {}),
       },
-    });
+      sessionAffinity
+        ? {
+            extraHeaders: {
+              "x-session-affinity": sessionAffinity,
+            },
+          }
+        : undefined,
+    );
+  };
 
-  let response = await runModel("medium");
+  const firstStartedAt = Date.now();
+  const shouldStreamFirstPass = !!onDelta && !treeIdentification;
+  let response = await runModel("medium", "", shouldStreamFirstPass);
+  let streamed: { answer: string; usage: ModelUsage } | null = null;
 
-  console.log(
-    "AI_RAW_RESPONSE",
-    JSON.stringify(response).slice(0, 10000),
-  );
+  if (shouldStreamFirstPass) {
+    streamed = await consumeModelStream(response, onDelta!);
+  }
 
-  let answer = extractAnswer(response);
+  const firstPassMs = elapsedMs(firstStartedAt);
+
+  let answer = streamed?.answer || extractAnswer(response);
+  let usage = streamed?.usage || extractUsage(response);
+  let verificationMs = 0;
+  let verified = false;
 
   if (
     treeIdentification &&
     /varmuusarvio\s*:\s*epävarma/i.test(answer)
   ) {
     console.log("TREE_HIGH_VERIFICATION", true);
-    response = await runModel(
-      "high",
-      "\nEnsimmäinen arvio jäi epävarmaksi. Tee nyt perusteellisempi lähilajien vertailu samoista kuvista, mutta pidä vastaus edelleen tiiviinä.\n",
-    );
+    verified = true;
+    onVerification?.();
+    const verificationStartedAt = Date.now();
+    response = await runModel("high", answer);
+    verificationMs = elapsedMs(verificationStartedAt);
     answer = extractAnswer(response);
+    usage = addUsage(usage, extractUsage(response));
   }
+
+  if (onDelta && treeIdentification && answer) onDelta(answer);
 
   if (!answer) {
     console.error(
       "EMPTY_RESPONSE_STRUCTURE",
-      JSON.stringify(response).slice(0, 10000),
+      JSON.stringify(Object.keys(response ?? {})).slice(0, 1000),
     );
 
     throw new Error("GPT-5.6 Sol returned empty answer");
   }
 
   console.log("ANSWER_LENGTH", answer.length);
+  console.log("MODEL_USAGE", JSON.stringify(usage));
 
-  return answer;
+  return {
+    answer,
+    firstPassMs,
+    verificationMs,
+    verified,
+    usage,
+  };
 }
 
 export class ConversationMemory {
@@ -631,56 +1062,31 @@ export class ConversationMemory {
 
   async fetch(request: Request): Promise<Response> {
     try {
-      const body: any = await request.json().catch(() => ({}));
-      const images = cleanImages(body);
-      const assessmentMode = body?.assessment === true;
-      const question =
-        cleanQuestion(body?.question, assessmentMode ? 4000 : 500) ||
-        (assessmentMode
-          ? DEFAULT_ASSESSMENT_QUESTION
-          : images.length === 3
-          ? DEFAULT_TREE_QUESTION
-          : images.length > 0
-            ? DEFAULT_IMAGE_QUESTION
-            : "");
-
-      if (!question) {
-        return json(
-          {
-            ok: false,
-            answer: "Kysymys puuttuu.",
-          },
-          400,
-        );
-      }
+      const url = new URL(request.url);
 
       const storedHistory =
         (await this.state.storage.get<ConversationTurn[]>(
           "history",
         )) ?? [];
-
       const history = storedHistory.slice(
         -MAX_CONVERSATION_TURNS,
       );
 
-      const ragQuestion = [
-        ...history.slice(-2).map((turn) => turn.question),
-        question,
-      ].join("\n");
+      if (request.method === "GET" && url.pathname === "/history") {
+        return json({ ok: true, history });
+      }
 
-      const context =
-        images.length > 0 && body?.questionWasEmpty
-          ? ""
-          : await getSmallRagContext(this.env, ragQuestion);
+      if (request.method !== "POST" || url.pathname !== "/history") {
+        return json({ ok: false, error: "Tuntematon muistipyyntö." }, 404);
+      }
 
-      const answer = await askGpt56Sol(
-        this.env,
-        question,
-        context,
-        history,
-        images,
-        assessmentMode,
-      );
+      const body: any = await request.json().catch(() => ({}));
+      const question = cleanQuestion(body?.question, 4000);
+      const answer = limitText(body?.answer, 6000);
+
+      if (!question || !answer) {
+        return json({ ok: false, error: "Muistimerkintä on puutteellinen." }, 400);
+      }
 
       const updatedHistory = [
         ...history,
@@ -701,14 +1107,7 @@ export class ConversationMemory {
 
       return json({
         ok: true,
-        answer,
-        imageUsed: images.length > 0,
-        imagesUsed: images.length,
         historySize: updatedHistory.length,
-        rag: {
-          used: context.length > 0,
-          contextLength: context.length,
-        },
       });
     } catch (error: any) {
       console.error(
@@ -734,17 +1133,99 @@ export class ConversationMemory {
   }
 }
 
+async function readConversationHistory(
+  memory: DurableObjectStub,
+): Promise<ConversationTurn[]> {
+  const response = await memory.fetch("https://conversation-memory/history", {
+    method: "GET",
+  });
+  const data: any = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data?.ok || !Array.isArray(data?.history)) {
+    throw new Error(data?.debug || "Conversation history could not be read");
+  }
+
+  return data.history.slice(-MAX_CONVERSATION_TURNS);
+}
+
+async function appendConversationHistory(
+  memory: DurableObjectStub,
+  question: string,
+  answer: string,
+): Promise<number> {
+  const response = await memory.fetch("https://conversation-memory/history", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, answer }),
+  });
+  const data: any = await response.json().catch(() => ({}));
+
+  if (!response.ok || !data?.ok) {
+    throw new Error(data?.debug || "Conversation history could not be saved");
+  }
+
+  return numberValue(data?.historySize);
+}
+
+function createPerformanceMetrics(
+  mode: string,
+  streamed: boolean,
+  requestStartedAt: number,
+  memoryReadMs: number,
+  ragMs: number,
+  memoryWriteMs: number,
+  imageBytes: number,
+  model: ModelResult,
+): PerformanceMetrics {
+  return {
+    mode,
+    streamed,
+    totalMs: elapsedMs(requestStartedAt),
+    memoryReadMs,
+    ragMs,
+    firstPassMs: model.firstPassMs,
+    verificationMs: model.verificationMs,
+    memoryWriteMs,
+    imageBytes,
+    inputTokens: model.usage.inputTokens,
+    outputTokens: model.usage.outputTokens,
+    reasoningTokens: model.usage.reasoningTokens,
+    cachedTokens: model.usage.cachedTokens,
+    verified: model.verified,
+  };
+}
+
 export default {
   async fetch(
     request: Request,
     env: Env,
+    ctx: ExecutionContext,
   ): Promise<Response> {
-    const url = new URL(request.url);
+    const incomingUrl = new URL(request.url);
+    const isSiteLaunchRequest =
+      SITE_LAUNCH_HOSTS.has(incomingUrl.hostname) &&
+      (incomingUrl.pathname === SITE_LAUNCH_PATH ||
+        incomingUrl.pathname.startsWith(`${SITE_LAUNCH_PATH}/`));
+
+    if (isSiteLaunchRequest && incomingUrl.pathname === SITE_LAUNCH_PATH) {
+      incomingUrl.pathname = `${SITE_LAUNCH_PATH}/`;
+      return Response.redirect(incomingUrl.toString(), 308);
+    }
+
+    const url = new URL(incomingUrl);
+    let routedRequest = request;
+    if (isSiteLaunchRequest) {
+      url.pathname = incomingUrl.pathname.slice(SITE_LAUNCH_PATH.length) || "/";
+      routedRequest = new Request(url.toString(), request);
+    }
 
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: corsHeaders,
+        headers: {
+          ...corsHeaders,
+          ...securityHeaders,
+        },
       });
     }
 
@@ -757,14 +1238,21 @@ export default {
           assets: !!env.ASSETS,
           workersAI: !!env.AI,
           aiSearch: !!env.PUU_SEARCH,
-          r2: !!env.r2jukipuu,
-          images: !!env.kuvat,
           conversations: !!env.CONVERSATIONS,
+          askRateLimiter: !!env.ASK_RATE_LIMITER,
+          assessmentRateLimiter: !!env.ASSESSMENT_RATE_LIMITER,
         },
       });
     }
 
     if (url.pathname === "/api/assessment-login" && request.method === "POST") {
+      const limited = await rateLimitResponse(
+        request,
+        env.ASSESSMENT_RATE_LIMITER,
+        "assessment-login",
+      );
+      if (limited) return limited;
+
       if (!env.ASSESSMENT_PASSWORD) {
         return json({ ok: false, error: "Kuntoarvion salasanaa ei ole vielä asetettu." }, 503);
       }
@@ -784,10 +1272,16 @@ export default {
       url.pathname === "/api/ask" &&
       request.method === "POST"
     ) {
+      const requestStartedAt = Date.now();
       try {
-        const body: any = await request
-          .json()
-          .catch(() => ({}));
+        const limited = await rateLimitResponse(
+          request,
+          env.ASK_RATE_LIMITER,
+          "ask",
+        );
+        if (limited) return limited;
+
+        const body: any = await parseAskBody(request);
 
         const assessmentMode = body?.assessment === true;
         if (assessmentMode) {
@@ -830,7 +1324,7 @@ export default {
           );
         }
 
-        console.log("QUESTION", effectiveQuestion);
+        console.log("QUESTION_LENGTH", effectiveQuestion.length);
         console.log("IMAGE_COUNT", images.length);
 
         const conversationId =
@@ -840,43 +1334,185 @@ export default {
           env.CONVERSATIONS.idFromName(conversationId);
         const memory = env.CONVERSATIONS.get(objectId);
 
-        const memoryResponse = await memory.fetch(
-          "https://conversation-memory/ask",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
+        const memoryReadStartedAt = Date.now();
+        const history = await readConversationHistory(memory);
+        const memoryReadMs = elapsedMs(memoryReadStartedAt);
+
+        const ragQuestion = [
+          ...history.slice(-2).map((turn) => turn.question),
+          effectiveQuestion,
+        ].join("\n");
+        const rag = images.length > 0 && !question
+          ? { context: "", durationMs: 0, matchCount: 0 }
+          : await getSmallRagContext(env, ragQuestion);
+
+        const mode = requestMode(assessmentMode, images);
+        const imageBytes = images.reduce((sum, image) => sum + image.size, 0);
+        const wantsStream = request.headers
+          .get("Accept")
+          ?.includes("text/event-stream") === true;
+
+        if (wantsStream) {
+          let clientClosed = false;
+          const responseStream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              const emit = (event: string, data: unknown) => {
+                if (clientClosed) return;
+                try {
+                  controller.enqueue(sseEvent(event, data));
+                } catch {
+                  clientClosed = true;
+                }
+              };
+
+              emit("phase", { message: "Muodostan vastausta..." });
+
+              const work = (async () => {
+                try {
+                  const model = await askGpt56Sol(
+                    env,
+                    effectiveQuestion,
+                    rag.context,
+                    history,
+                    images,
+                    assessmentMode,
+                    conversationId,
+                    () => emit("phase", {
+                      message: "Epävarma tunnistus tarkistetaan perusteellisemmin...",
+                    }),
+                    (delta) => emit("delta", { delta }),
+                  );
+
+                  const memoryWriteStartedAt = Date.now();
+                  let historySize = history.length;
+                  try {
+                    historySize = await appendConversationHistory(
+                      memory,
+                      effectiveQuestion,
+                      model.answer,
+                    );
+                  } catch (error: any) {
+                    console.error("MEMORY_WRITE_ERROR", error?.message || error);
+                  }
+                  const memoryWriteMs = elapsedMs(memoryWriteStartedAt);
+                  const metrics = createPerformanceMetrics(
+                    mode,
+                    true,
+                    requestStartedAt,
+                    memoryReadMs,
+                    rag.durationMs,
+                    memoryWriteMs,
+                    imageBytes,
+                    model,
+                  );
+                  recordPerformance(env, metrics);
+
+                  emit("done", {
+                    ok: true,
+                    conversationId,
+                    version: VERSION,
+                    imageUsed: images.length > 0,
+                    imagesUsed: images.length,
+                    historySize,
+                    rag: {
+                      used: rag.context.length > 0,
+                      contextLength: rag.context.length,
+                      matchCount: rag.matchCount,
+                    },
+                    performance: metrics,
+                  });
+                } catch (error: any) {
+                  console.error("ASK_STREAM_ERROR", error?.message || error);
+                  emit("error", {
+                    message:
+                      "AI-puuopas ei saanut vastausta juuri nyt. " +
+                      "Kokeile hetken kuluttua uudelleen.",
+                  });
+                } finally {
+                  if (!clientClosed) controller.close();
+                }
+              })();
+
+              ctx.waitUntil(work);
             },
-            body: JSON.stringify({
-              question: effectiveQuestion,
-              questionWasEmpty: !question,
-              images,
-              assessment: assessmentMode,
-            }),
-          },
-        );
+            cancel() {
+              clientClosed = true;
+            },
+          });
 
-        const result: any = await memoryResponse
-          .json()
-          .catch(() => ({}));
-
-        if (!memoryResponse.ok || !result?.ok) {
-          throw new Error(
-            result?.debug ||
-              "Conversation memory returned an error",
-          );
+          return new Response(responseStream, {
+            status: 200,
+            headers: {
+              ...corsHeaders,
+              ...securityHeaders,
+              "Content-Type": "text/event-stream; charset=utf-8",
+              "Cache-Control": "no-store",
+              "X-Conversation-Id": conversationId,
+              "X-AI-Puuopas-Version": VERSION,
+              "Server-Timing": serverTiming({
+                memoryReadMs,
+                ragMs: rag.durationMs,
+              }),
+              "Set-Cookie": conversationCookie(conversationId),
+            },
+          });
         }
+
+        const model = await askGpt56Sol(
+          env,
+          effectiveQuestion,
+          rag.context,
+          history,
+          images,
+          assessmentMode,
+          conversationId,
+        );
+        const memoryWriteStartedAt = Date.now();
+        let historySize = history.length;
+        try {
+          historySize = await appendConversationHistory(
+            memory,
+            effectiveQuestion,
+            model.answer,
+          );
+        } catch (error: any) {
+          console.error("MEMORY_WRITE_ERROR", error?.message || error);
+        }
+        const memoryWriteMs = elapsedMs(memoryWriteStartedAt);
+        const metrics = createPerformanceMetrics(
+          mode,
+          false,
+          requestStartedAt,
+          memoryReadMs,
+          rag.durationMs,
+          memoryWriteMs,
+          imageBytes,
+          model,
+        );
+        recordPerformance(env, metrics);
 
         return json(
           {
-            ...result,
+            ok: true,
+            answer: model.answer,
+            imageUsed: images.length > 0,
+            imagesUsed: images.length,
+            historySize,
+            rag: {
+              used: rag.context.length > 0,
+              contextLength: rag.context.length,
+              matchCount: rag.matchCount,
+            },
+            performance: metrics,
             conversationId,
             version: VERSION,
           },
           200,
           {
-            "Set-Cookie":
-              conversationCookie(conversationId),
+            "Server-Timing": serverTiming(metrics),
+            "X-Conversation-Id": conversationId,
+            "X-AI-Puuopas-Version": VERSION,
+            "Set-Cookie": conversationCookie(conversationId),
           },
         );
       } catch (error: any) {
@@ -950,6 +1586,6 @@ export default {
       }
     }
 
-    return env.ASSETS.fetch(request);
+    return withSecurityHeaders(await env.ASSETS.fetch(routedRequest));
   },
 };
