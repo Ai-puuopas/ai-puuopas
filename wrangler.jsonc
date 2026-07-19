@@ -3,7 +3,7 @@
   "name": "ai-puuopas",
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-03",
-  "workers_dev": false,
+  "workers_dev": true,
   "preview_urls": false,
 
   "routes": [
@@ -34,6 +34,7 @@
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": [
+      "/",
       "/api/*",
       "/ai-puuopas/public",
       "/ai-puuopas/public/*"
