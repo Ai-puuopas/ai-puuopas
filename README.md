@@ -2,9 +2,14 @@
 
 Cloudflare Worker -taustapalvelu JuKiPuun AI-puuoppaalle.
 
-Julkinen käyttöliittymä:
+Julkinen käyttöliittymä käynnistyy suoraan JuKiPuun sivustolta:
 
-<https://ai-puuopas.jukipuu-fi.workers.dev/>
+<https://jukipuu.fi/ai-puuopas/public/>
+
+Cloudflare Worker palvelee koko sovelluksen tämän sivustopolun kautta. Polun
+alla toimivat käyttöliittymä, kuvatunnistus, kuntoarvio ja API-kutsut samalla
+alkuperällä. Workers.dev-osoite säilyy teknisenä varayhteytenä ja
+terveystarkistuksia varten.
 
 ## Kuvan liittäminen keskusteluun
 
@@ -22,7 +27,7 @@ Tiedosto `public/puuopas-chat.js` lisää nykyiseen keskustelukenttään:
 Lisää moduuli Puuoppaan HTML-sivun loppuun ennen `</body>`-tagia:
 
 ```html
-<script src="https://ai-puuopas.jukipuu-fi.workers.dev/puuopas-chat.js"></script>
+<script src="https://jukipuu.fi/ai-puuopas/public/puuopas-chat.js"></script>
 ```
 
 Selain pienentää kuvan ennen lähettämistä. Rajapinta hyväksyy JPG-, PNG- ja

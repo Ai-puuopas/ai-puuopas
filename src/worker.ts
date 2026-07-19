@@ -61,7 +61,9 @@ type PerformanceMetrics = {
   verified: boolean;
 };
 
-const VERSION = "0.14.0-streaming-and-observability";
+const VERSION = "0.15.0-site-launch";
+const SITE_LAUNCH_HOSTS = new Set(["jukipuu.fi", "www.jukipuu.fi"]);
+const SITE_LAUNCH_PATH = "/ai-puuopas/public";
 const ASSESSMENT_TOKEN_TTL_SECONDS = 8 * 60 * 60;
 const CONVERSATION_COOKIE = "puuopas_conversation";
 const MAX_CONVERSATION_TURNS = 5;
@@ -1131,7 +1133,23 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ): Promise<Response> {
-    const url = new URL(request.url);
+    const incomingUrl = new URL(request.url);
+    const isSiteLaunchRequest =
+      SITE_LAUNCH_HOSTS.has(incomingUrl.hostname) &&
+      (incomingUrl.pathname === SITE_LAUNCH_PATH ||
+        incomingUrl.pathname.startsWith(`${SITE_LAUNCH_PATH}/`));
+
+    if (isSiteLaunchRequest && incomingUrl.pathname === SITE_LAUNCH_PATH) {
+      incomingUrl.pathname = `${SITE_LAUNCH_PATH}/`;
+      return Response.redirect(incomingUrl.toString(), 308);
+    }
+
+    const url = new URL(incomingUrl);
+    let routedRequest = request;
+    if (isSiteLaunchRequest) {
+      url.pathname = incomingUrl.pathname.slice(SITE_LAUNCH_PATH.length) || "/";
+      routedRequest = new Request(url.toString(), request);
+    }
 
     if (request.method === "OPTIONS") {
       return new Response(null, {
@@ -1482,6 +1500,6 @@ export default {
       }
     }
 
-    return env.ASSETS.fetch(request);
+    return env.ASSETS.fetch(routedRequest);
   },
 };

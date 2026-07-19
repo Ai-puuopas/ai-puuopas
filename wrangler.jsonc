@@ -4,6 +4,13 @@
   "main": "src/worker.ts",
   "compatibility_date": "2026-07-03",
 
+  "routes": [
+    {
+      "pattern": "jukipuu.fi/ai-puuopas/public*",
+      "zone_name": "jukipuu.fi"
+    }
+  ],
+
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
@@ -11,7 +18,11 @@
 
   "assets": {
     "directory": "./public",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*",
+      "/ai-puuopas/public*"
+    ]
   },
 
   "analytics_engine_datasets": [

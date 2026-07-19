@@ -1,11 +1,18 @@
 (function () {
   "use strict";
 
+  const SITE_LAUNCH_PATH = "/ai-puuopas/public";
+  const isSiteLaunch = ["jukipuu.fi", "www.jukipuu.fi"].includes(location.hostname) &&
+    (location.pathname === SITE_LAUNCH_PATH ||
+      location.pathname.startsWith(`${SITE_LAUNCH_PATH}/`));
   const WORKER_ORIGIN = ["localhost", "127.0.0.1"].includes(location.hostname)
     ? location.origin
     : "https://ai-puuopas.jukipuu-fi.workers.dev";
-  const API_URL = `${WORKER_ORIGIN}/api/ask`;
-  const ASSESSMENT_LOGIN_URL = `${WORKER_ORIGIN}/api/assessment-login`;
+  const API_ORIGIN = isSiteLaunch
+    ? `${location.origin}${SITE_LAUNCH_PATH}`
+    : WORKER_ORIGIN;
+  const API_URL = `${API_ORIGIN}/api/ask`;
+  const ASSESSMENT_LOGIN_URL = `${API_ORIGIN}/api/assessment-login`;
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
   const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
   const MAX_IMAGE_EDGE = 1600;
