@@ -302,7 +302,10 @@
     return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
   }
 
-  function startLoading(initialPhase) {
+  function startLoading(
+    initialPhase,
+    loadingNote = "Tietojen haku ja tarkistus voi kestää noin 1–1,5 minuuttia.",
+  ) {
     stopLoading();
     answerPanel.style.display = "block";
     answerText.innerHTML =
@@ -310,7 +313,7 @@
         '<span class="puuopas-loading-spinner" aria-hidden="true">↻</span>' +
         '<div><strong class="puuopas-loading-phase"></strong>' +
           '<div class="puuopas-loading-time"></div>' +
-          '<div class="puuopas-loading-note">Tietojen haku ja tarkistus voi kestää noin 1–1,5 minuuttia.</div>' +
+          `<div class="puuopas-loading-note">${loadingNote}</div>` +
         '</div>' +
       '</div>';
 
@@ -1027,6 +1030,7 @@
       status.textContent = "Tunnistan puuta vaiheittain kolmesta kuvasta...";
       const finishLoading = startLoading(
         "Rajaukseen käytetään ensin lehteä tai silmua...",
+        "Tunnistus valmistuu yleensä noin 15–30 sekunnissa. Vaikea lähilajitapaus tarkistetaan automaattisesti tarkemmin.",
       );
       try {
         const data = await askApi({ images });

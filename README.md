@@ -35,6 +35,11 @@ karsii niitä rungon tuntomerkeillä ja käyttää yleiskuvaa lopullisena
 järkevyystarkistuksena. Epävarmassa tapauksessa AI pyytää yhden ratkaisevan
 lisäkuvan konkreettisella kuvausohjeella.
 
+Normaali kolmen kuvan tunnistus käyttää GPT-5.6 Solin medium-päättelyä ja
+tiivistä vastausta. Yleiskuva käsitellään kevyemmin kuin lehti tai silmu ja
+runko. Jos ensimmäisen vastauksen varmuusarvio on epävarma, sama aineisto
+tarkistetaan automaattisesti high-päättelyllä.
+
 ## Kuntoarvion raakaversio
 
 “Tee kuntoarvio” -kortti avaa JuKiPuun kuntoarviopohjaan perustuvan ohjatun

@@ -22,7 +22,7 @@ type SubmittedImage = {
   label: string;
 };
 
-const VERSION = "0.12.0-arborist-ai-approvals";
+const VERSION = "0.13.0-fast-tree-identification";
 const ASSESSMENT_TOKEN_TTL_SECONDS = 8 * 60 * 60;
 const CONVERSATION_COOKIE = "puuopas_conversation";
 const MAX_CONVERSATION_TURNS = 5;
@@ -499,12 +499,16 @@ async function askGpt56Sol(
     `Nykyinen kysymys:\n${question}\n\n` +
     `Hakukonteksti:\n${context || "Ei hakukontekstia."}`;
 
+  const treeIdentification = !assessmentMode && images.length === 3;
   const imageContent = images.flatMap((image) => [
     { type: "input_text", text: `${image.label}:` },
     {
       type: "input_image",
       image_url: image.dataUrl,
-      detail: "high",
+      detail:
+        treeIdentification && image.label === "Kuva 3 – puun yleiskuva"
+          ? "low"
+          : "high",
     },
   ]);
 
@@ -549,7 +553,7 @@ async function askGpt56Sol(
     "Kun mukana on kolme nimettyä puukuvaa, etene aina järjestyksessä: 1) lehti tai silmu rajaa lajikandidaatit, 2) runko ja kaarna karsivat kandidaatteja, 3) yleiskuva tarkistaa kasvutavan, haarautumisen ja latvuksen sopivuuden.\n" +
     "Älä anna yleiskuvalle suurempaa painoa kuin selvästi näkyville lehden, silmun tai kaarnan tuntomerkeille.\n" +
     "Vertaa lähilajeja nimenomaan niiden erottavien tuntomerkkien avulla. Älä nosta varmuutta vain siksi, että kaikki kolme kuvaa on toimitettu.\n" +
-    "Kolmen puukuvan vastauksessa anna: näkyvät havainnot kuvittain, 2–4 alustavaa kandidaattia ja niiden karsinta, todennäköisin puulaji, enintään kaksi vaihtoehtoa sekä sanallinen varmuusarvio (varma, todennäköinen tai epävarma).\n" +
+    "Kolmen puukuvan vastauksessa anna tiiviisti: 3–5 ratkaisevaa näkyvää tuntomerkkiä, todennäköisin puulaji, enintään kaksi vaihtoehtoa sekä täsmälleen muodossa 'Varmuusarvio: varma', 'Varmuusarvio: todennäköinen' tai 'Varmuusarvio: epävarma'.\n" +
     "Jos lajitason tunnistus ei ole perusteltu, ilmoita suku tai lajiryhmä. Pyydä silloin vain yksi ratkaisevin lisäkuva ja anna kuvaajalle konkreettinen kuvausohje ilman kasvitieteellisen erityisosaamisen vaatimusta.\n" +
     "Kerro tunnistuksen varmuus ja pyydä tarvittaessa lisäkuvia tai tietoja paikasta, koosta ja vuodenajasta.\n" +
     "Älä koskaan päättele sienen syötävyyttä turvalliseksi pelkän kuvan perusteella.\n" +
@@ -569,22 +573,38 @@ async function askGpt56Sol(
   );
   console.log("INSTRUCTIONS_LENGTH", instructions.length);
 
-  const response = await env.AI.run(
-    "openai/gpt-5.6-sol",
-    {
+  const runModel = (effort: "medium" | "high", extraInstructions = "") =>
+    env.AI.run("openai/gpt-5.6-sol", {
       input,
-      instructions,
-      max_output_tokens: 2500,
-      reasoning: { effort: images.length > 0 ? "high" : "medium" },
-    },
-  );
+      instructions: instructions + extraInstructions,
+      max_output_tokens: treeIdentification ? 800 : 2500,
+      reasoning: {
+        effort: assessmentMode || (!treeIdentification && images.length > 0)
+          ? "high"
+          : effort,
+      },
+    });
+
+  let response = await runModel("medium");
 
   console.log(
     "AI_RAW_RESPONSE",
     JSON.stringify(response).slice(0, 10000),
   );
 
-  const answer = extractAnswer(response);
+  let answer = extractAnswer(response);
+
+  if (
+    treeIdentification &&
+    /varmuusarvio\s*:\s*epävarma/i.test(answer)
+  ) {
+    console.log("TREE_HIGH_VERIFICATION", true);
+    response = await runModel(
+      "high",
+      "\nEnsimmäinen arvio jäi epävarmaksi. Tee nyt perusteellisempi lähilajien vertailu samoista kuvista, mutta pidä vastaus edelleen tiiviinä.\n",
+    );
+    answer = extractAnswer(response);
+  }
 
   if (!answer) {
     console.error(
