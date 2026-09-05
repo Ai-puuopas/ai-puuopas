@@ -96,7 +96,7 @@ type PerformanceMetrics = {
   verified: boolean;
 };
 
-const VERSION = "0.17.0-astra-memory";
+const VERSION = "0.17.1-astra-memory";
 const PRIMARY_MODEL = "openai/gpt-6-astra";
 const FALLBACK_MODEL = "openai/gpt-5.6-sol";
 const ASTRA_RETRY_DELAY_MS = 10 * 60 * 1000;
@@ -607,7 +607,7 @@ function emptyConversationState(): ConversationState {
 function cleanMetadataText(value: unknown, max = 180): string {
   return limitText(value, max)
     .replace(/^[-*•#\s]+/, "")
-    .replace(/\*\*/g, "")
+    .replace(/[*_`]/g, "")
     .trim();
 }
 
