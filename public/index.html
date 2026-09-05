@@ -167,6 +167,207 @@
       font-weight: 600;
     }
 
+    .privacy-inline {
+      color: #53655a;
+      font-size: 14px;
+      line-height: 1.45;
+      margin: 14px 2px 0;
+    }
+
+    .privacy-text-button {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      color: #1f6637;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+      padding: 0;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .privacy-page-button {
+      appearance: none;
+      background: #fff;
+      border: 1px solid #b8cdbd;
+      border-radius: 12px;
+      color: #244b2d;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+      margin-top: 8px;
+      padding: 11px 16px;
+    }
+
+    .privacy-page-button:hover,
+    .privacy-page-button:focus-visible {
+      background: #eef5ef;
+    }
+
+    .privacy-gate {
+      align-items: center;
+      background: rgba(10, 25, 13, .78);
+      display: flex;
+      inset: 0;
+      justify-content: center;
+      padding: 20px;
+      position: fixed;
+      z-index: 4000;
+    }
+
+    .privacy-notice-seen .privacy-gate {
+      display: none;
+    }
+
+    .privacy-gate-card {
+      background: #fff;
+      border-radius: 24px;
+      box-shadow: 0 28px 80px rgba(0, 0, 0, .3);
+      max-width: 680px;
+      padding: clamp(24px, 5vw, 42px);
+      text-align: left;
+      width: 100%;
+    }
+
+    .privacy-kicker {
+      color: #1f6637;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      margin: 0 0 10px;
+      text-transform: uppercase;
+    }
+
+    .privacy-gate-card h2 {
+      color: #142015;
+      font-size: clamp(28px, 5vw, 40px);
+      line-height: 1.1;
+      margin: 0 0 16px;
+    }
+
+    .privacy-gate-card p {
+      color: #425346;
+      font-size: 17px;
+      line-height: 1.55;
+      margin: 0 0 14px;
+    }
+
+    .privacy-warning {
+      background: #f3f8f4;
+      border-left: 4px solid #2f633b;
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+
+    .privacy-actions {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .privacy-primary,
+    .privacy-secondary,
+    .privacy-dialog-close {
+      appearance: none;
+      border-radius: 12px;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 700;
+      padding: 12px 17px;
+    }
+
+    .privacy-primary {
+      background: #1f6637;
+      border: 1px solid #1f6637;
+      color: #fff;
+    }
+
+    .privacy-primary:hover,
+    .privacy-primary:focus-visible {
+      background: #174d2a;
+    }
+
+    .privacy-secondary,
+    .privacy-dialog-close {
+      background: #fff;
+      border: 1px solid #aebfb2;
+      color: #244b2d;
+    }
+
+    .privacy-dialog {
+      background: #fff;
+      border: 0;
+      border-radius: 22px;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .3);
+      color: #26352a;
+      max-height: min(88vh, 920px);
+      max-width: 780px;
+      padding: 0;
+      width: calc(100% - 32px);
+    }
+
+    .privacy-dialog::backdrop {
+      background: rgba(10, 25, 13, .72);
+    }
+
+    .privacy-dialog-header {
+      align-items: flex-start;
+      background: #eef5ef;
+      border-bottom: 1px solid #d4e0d6;
+      display: flex;
+      gap: 20px;
+      justify-content: space-between;
+      padding: 24px clamp(22px, 5vw, 36px);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    .privacy-dialog-header h2 {
+      color: #142015;
+      font-size: clamp(25px, 4vw, 34px);
+      margin: 0;
+    }
+
+    .privacy-dialog-close {
+      flex: 0 0 auto;
+      padding: 9px 13px;
+    }
+
+    .privacy-dialog-content {
+      line-height: 1.58;
+      padding: 10px clamp(22px, 5vw, 36px) 34px;
+      text-align: left;
+    }
+
+    .privacy-dialog-content h3 {
+      color: #1c4828;
+      font-size: 20px;
+      margin: 26px 0 8px;
+    }
+
+    .privacy-dialog-content p,
+    .privacy-dialog-content li {
+      font-size: 16px;
+    }
+
+    .privacy-dialog-content ul {
+      padding-left: 22px;
+    }
+
+    .privacy-dialog-content a {
+      color: #1f6637;
+      font-weight: 700;
+    }
+
+    .privacy-updated {
+      color: #607064;
+      font-size: 14px !important;
+    }
+
     noscript {
       display: block;
       max-width: 980px;
@@ -183,20 +384,54 @@
       .search-row { flex-direction: column; }
       .search-row > button[type="submit"] { height: 58px; }
       .cards { grid-template-columns: 1fr; }
+      .privacy-actions { align-items: stretch; flex-direction: column; }
+      .privacy-primary, .privacy-secondary { width: 100%; }
+      .privacy-dialog-header { align-items: center; }
     }
   </style>
 
+  <script src="./privacy.js"></script>
   <script src="./puuopas-chat.js" defer></script>
 </head>
 
 <body>
-  <div class="topbar">
+  <div
+    id="privacyGate"
+    class="privacy-gate"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="privacyGateTitle"
+  >
+    <section class="privacy-gate-card">
+      <p class="privacy-kicker">Tietosuoja AI‑Puuoppaassa</p>
+      <h2 id="privacyGateTitle">Ennen kuin jatkat</h2>
+      <p>
+        AI‑Puuopas käsittelee kirjoittamasi kysymykset ja vapaaehtoisesti
+        lähettämäsi kuvat vastauksen tuottamiseksi. Sijaintia käsitellään vain,
+        jos annat siihen erillisen suostumuksen kuntoarviossa.
+      </p>
+      <p class="privacy-warning">
+        Älä lähetä kuvia, joissa näkyy henkilöitä, rekisteritunnuksia tai muita
+        puun arvioinnin kannalta tarpeettomia henkilötietoja.
+      </p>
+      <div class="privacy-actions">
+        <button type="button" class="privacy-primary" id="continueToGuide">
+          Olen lukenut – jatka Puuoppaaseen
+        </button>
+        <button type="button" class="privacy-secondary" data-open-privacy>
+          Lue tietosuojaseloste
+        </button>
+      </div>
+    </section>
+  </div>
+
+  <div class="topbar" id="siteNavigation" inert>
     <a class="home-button" href="https://jukipuu.fi/">
       🌳 JuKiPuun etusivulle
     </a>
   </div>
 
-  <main class="page">
+  <main class="page" id="appContent" inert>
     <h1>Miten voimme auttaa?</h1>
 
     <p class="lead">
@@ -219,6 +454,13 @@
         >
         <button type="submit">Hae</button>
       </div>
+      <p class="privacy-inline">
+        Lähettämällä kysymyksen tai kuvan pyydät AI‑Puuopasta käsittelemään
+        aineiston vastauksen tuottamiseksi.
+        <button type="button" class="privacy-text-button" data-open-privacy>
+          Lue tietosuojasta
+        </button>
+      </p>
     </form>
 
     <div id="answerPanel" class="answer-panel" aria-live="polite">
@@ -248,6 +490,136 @@
     <p class="note">
       Huom. AI-puuopas ei korvaa paikan päällä tehtävää arboristin kuntoarviota.
     </p>
+    <button type="button" class="privacy-page-button" data-open-privacy>
+      Tietosuojaseloste
+    </button>
   </main>
+
+  <dialog
+    id="privacyPolicyDialog"
+    class="privacy-dialog"
+    aria-labelledby="privacyPolicyTitle"
+  >
+    <div class="privacy-dialog-header">
+      <h2 id="privacyPolicyTitle">AI‑Puuoppaan tietosuojaseloste</h2>
+      <button type="button" class="privacy-dialog-close" id="closePrivacyPolicy">
+        Sulje
+      </button>
+    </div>
+    <div class="privacy-dialog-content">
+      <p class="privacy-updated">Päivitetty 5.9.2026</p>
+
+      <h3>Rekisterinpitäjä</h3>
+      <p>
+        JuKiPuu / Jukka Kirstinä<br>
+        Sähköposti:
+        <a href="mailto:jukka@jukipuu.fi">jukka@jukipuu.fi</a><br>
+        Puhelin: <a href="tel:+358442350560">044 23 505 60</a>
+      </p>
+
+      <h3>Mitä tietoja käsittelemme?</h3>
+      <ul>
+        <li>AI‑Puuoppaalle kirjoitetut kysymykset ja palvelun tuottamat vastaukset.</li>
+        <li>Vapaaehtoisesti lähetetyt puu-, kasvi-, sieni- ja tuholaiskuvat.</li>
+        <li>
+          Salasanasuojatun kuntoarvion kohde- ja havaintotiedot sekä siihen
+          liitetyt kuvat.
+        </li>
+        <li>
+          GPS-koordinaatit ja laitteen ilmoittama tarkkuus vain käyttäjän
+          erillisellä suostumuksella.
+        </li>
+        <li>
+          Keskustelutunniste sekä palvelun turvallisuuden ja toimivuuden
+          kannalta tarpeelliset tekniset yhteys- ja suorituskykytiedot.
+        </li>
+      </ul>
+
+      <h3>Mihin tietoja käytetään ja millä perusteella?</h3>
+      <p>
+        Kysymyksiä, kuvia ja kuntoarvion tietoja käsitellään käyttäjän pyytämän
+        AI‑Puuopas-toiminnon toteuttamiseksi. Palvelun turvallisuutta,
+        väärinkäytön estämistä ja teknistä toimivuutta koskeva käsittely perustuu
+        JuKiPuun oikeutettuun etuun ylläpitää turvallista ja toimivaa palvelua.
+        GPS-sijainnin käsittely perustuu erikseen annettavaan suostumukseen.
+      </p>
+
+      <h3>Miten AI ja palveluntarjoajat käsittelevät tietoja?</h3>
+      <p>
+        Palvelu käyttää Cloudflaren Workers-, Workers AI-, AI Search-,
+        Durable Objects-, suojaus- ja analytiikkapalveluja. Kysymykset, kuvat ja
+        muut käyttäjän lähettämät tiedot käsitellään Cloudflaren kautta
+        vastauksen tuottamiseksi. Cloudflaren ilmoituksen mukaan Workers AI:n
+        asiakassisältöä ei käytetä AI-mallien kouluttamiseen tai palvelujen
+        parantamiseen ilman nimenomaista suostumusta.
+      </p>
+      <p>
+        Cloudflare toimii maailmanlaajuisesti. Mahdollisten ETA-alueen
+        ulkopuolisten tietojenkäsittelyjen suojatoimet määräytyvät Cloudflaren
+        sovellettavien tietosuojasopimusten mukaisesti.
+      </p>
+
+      <h3>Kuinka kauan tietoja säilytetään?</h3>
+      <ul>
+        <li>
+          Keskustelumuistissa säilytetään enintään kahdeksan viimeistä täydellistä
+          kysymys–vastaus-kierrosta sekä rajattu tekstiyhteenveto niitä edeltävästä
+          keskustelusta. Muistiin voidaan jäsentää aktiivinen lajikohde, olennaisia
+          tuntomerkkejä ja avoin jatkokysymys, jotta keskustelua voi jatkaa
+          luontevasti. Koko muisti poistetaan viimeistään 24 tunnin kuluttua
+          viimeisestä viestistä tai heti käyttäjän valitessa Uusi keskustelu.
+        </li>
+        <li>
+          Kuvia ei tallenneta keskustelumuistiin. Ne käsitellään vastauksen
+          tuottamisen aikana.
+        </li>
+        <li>
+          GPS-sijainti voi sisältyä kuntoarvion tekstitietoihin ja
+          keskustelumuistiin enintään 24 tunniksi. Sijainti näkyy myös avoimella
+          sivulla ja raporttiluonnoksessa, kunnes se poistetaan tai sivu suljetaan.
+        </li>
+        <li>
+          Sisällöttömiä teknisiä suorituskykymittareita ja turvallisuuslokeja
+          säilytetään vain palvelun valvonnan, suojauksen ja virheiden
+          selvittämisen edellyttämän ajan Cloudflare-tilin asetusten mukaisesti.
+        </li>
+      </ul>
+      <p>
+        Selain säilyttää keskustelutunnisteen paikallisesti, kunnes selaimen
+        sivustotiedot tyhjennetään. Palvelimen keskustelumuisti poistuu tästä
+        riippumatta 24 tunnissa.
+      </p>
+
+      <h3>GPS-sijainti ja suostumuksen peruuttaminen</h3>
+      <p>
+        Sijaintia ei lueta automaattisesti. GPS-toiminto aktivoituu vasta, kun
+        käyttäjä hyväksyy sijaintitiedon käsittelyn ja sallii sijainnin myös
+        selaimen omassa lupakyselyssä. Suostumuksen voi peruuttaa poistamalla
+        sijainnin kuntoarviolomakkeesta. Jo palvelimelle lähetettyä tietoa voi
+        pyytää poistettavaksi ottamalla yhteyttä rekisterinpitäjään.
+      </p>
+
+      <h3>Rekisteröidyn oikeudet</h3>
+      <p>
+        Soveltuvin osin käyttäjällä on oikeus saada pääsy henkilötietoihinsa,
+        pyytää niiden oikaisua tai poistamista, rajoittaa käsittelyä, vastustaa
+        oikeutettuun etuun perustuvaa käsittelyä ja peruuttaa suostumus.
+        Pyynnöt voi lähettää osoitteeseen
+        <a href="mailto:jukka@jukipuu.fi">jukka@jukipuu.fi</a>.
+        Käyttäjällä on myös oikeus tehdä valitus
+        <a href="https://tietosuoja.fi/" target="_blank" rel="noopener">
+          tietosuojavaltuutetun toimistolle
+        </a>.
+      </p>
+
+      <h3>AI-vastaukset</h3>
+      <p>
+        AI‑Puuoppaan vastaukset ja kuvista laaditut arviot ovat suuntaa-antavia.
+        Palvelu ei tee käyttäjää koskevia oikeudellisia tai vastaavia merkittäviä
+        automaattisia päätöksiä. Puu- ja turvallisuusriskit tulee tarvittaessa
+        tarkistaa paikan päällä arboristin kanssa.
+      </p>
+    </div>
+  </dialog>
 </body>
 </html>

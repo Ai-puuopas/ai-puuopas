@@ -13,6 +13,12 @@ JuKiPuu-osoitteeseen, mutta sen API-reitit eivät ole käytettävissä.
 Versioiden esikatseluosoitteet on poistettu käytöstä, jotta API toimii vain
 JuKiPuun WAF-suojatun sivustoreitin kautta.
 
+Käyttöliittymä näyttää ensikäynnillä tietosuojailmoituksen ennen palveluun
+siirtymistä. Varsinainen tietosuojaseloste on avattavissa sekä ilmoituksesta
+että Puuoppaan sivulta. GPS-sijaintia ei voi pyytää ennen erillistä,
+yksilöityä sijaintitiedon käsittelyä koskevaa suostumusta. Suostumuksen
+peruuttaminen poistaa lomakkeelle luetut koordinaatit ja tarkkuustiedon.
+
 ## Kuvan liittäminen keskusteluun
 
 Tiedosto `public/puuopas-chat.js` lisää nykyiseen keskustelukenttään:
@@ -22,9 +28,13 @@ Tiedosto `public/puuopas-chat.js` lisää nykyiseen keskustelukenttään:
 - kasvin, puun, sienen tai tuholaisen kuvatunnistuksen
 - “Tunnista puu” -kortille ohjatun kolmen kuvan tunnistuksen järjestyksessä:
   lehti tai silmu, runko ja lopuksi yleiskuva
-- lähetyksen jälkeisen etenemisilmaisimen, kuluneen ajan ja arvion siitä, että
-  tietojen haku ja tarkistus voi kestää noin 1–1,5 minuuttia
-- saman viiden keskustelukierroksen muistin myös sivujen välisissä API-kutsuissa
+- vastauksen todellisiin palvelinvaiheisiin perustuvan Ajatusvirta-näkymän ja
+  kuluneen ajan (mallin sisäistä päättelyä ei näytetä)
+- keskustelun viestiketjuna, vastauksessa näkyvät lähetetyt kuvat,
+  lajikohtaisen ominaispiirrekortin ja tarvittaessa yhden jatkokysymyksen
+- kahdeksan viimeisen keskustelukierroksen, vanhempien kierrosten rajatun
+  yhteenvedon, aktiivisen lajikohteen ja avoimen jatkokysymyksen muistin
+- Uusi keskustelu -painikkeen, joka poistaa palvelimen keskustelumuistin heti
 
 Lisää moduuli Puuoppaan HTML-sivun loppuun ennen `</body>`-tagia:
 
@@ -37,15 +47,22 @@ WebP-kuvat, joiden koko on enintään 5 Mt. Kolmen puukuvan yhteiskoko saa olla
 enintään 12 Mt. Kuvien sisältöä ei tallenneta keskustelumuistiin.
 
 Kolmen kuvan tunnistuksessa kaikki kuvapaikat täytetään ennen tunnistuksen
-käynnistämistä. GPT-5.6 Sol rajaa kandidaatit ensin lehden tai silmun avulla,
+käynnistämistä. Ensisijaiseksi määritetty GPT-6 Astra rajaa kandidaatit ensin
+lehden tai silmun avulla,
 karsii niitä rungon tuntomerkeillä ja käyttää yleiskuvaa lopullisena
 järkevyystarkistuksena. Epävarmassa tapauksessa AI pyytää yhden ratkaisevan
 lisäkuvan konkreettisella kuvausohjeella.
 
-Normaali kolmen kuvan tunnistus käyttää GPT-5.6 Solin medium-päättelyä ja
+Normaali kolmen kuvan tunnistus käyttää ensisijaisesti GPT-6 Astran
+medium-päättelyä ja
 tiivistä vastausta. Yleiskuva käsitellään kevyemmin kuin lehti tai silmu ja
 runko. Jos ensimmäisen vastauksen varmuusarvio on epävarma, sama aineisto
 tarkistetaan automaattisesti high-päättelyllä.
+
+Cloudflaren AI Gateway ei vielä 5.9.2026 tunnista `openai/gpt-6-astra`-mallia.
+Worker yrittää Astraa säännöllisesti ja siirtyy siihen automaattisesti heti,
+kun Cloudflare ottaa mallin käyttöön. Siihen asti vastaus tuotetaan
+`openai/gpt-5.6-sol`-varamallilla, jotta julkinen palvelu ei rikkoudu.
 
 Versiosta 0.14 alkaen teksti- ja yhden kuvan vastaukset suoratoistetaan
 selaimelle niiden valmistuessa. Kolmen kuvan tunnistus näytetään vasta

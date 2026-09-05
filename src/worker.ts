@@ -24,6 +24,24 @@ type RateLimitBinding = {
 type ConversationTurn = {
   question: string;
   answer: string;
+  createdAt?: string;
+  imageLabels?: string[];
+  speciesProfile?: SpeciesProfile | null;
+};
+
+type SpeciesProfile = {
+  commonName: string;
+  scientificName: string;
+  confidence: string;
+  characteristics: string[];
+};
+
+type ConversationState = {
+  schemaVersion: 2;
+  history: ConversationTurn[];
+  summary: string;
+  activeSpecies: SpeciesProfile | null;
+  followUpQuestion: string;
 };
 
 type SubmittedImage = {
@@ -48,6 +66,7 @@ type ModelUsage = {
 
 type ModelResult = {
   answer: string;
+  model: string;
   firstPassMs: number;
   verificationMs: number;
   verified: boolean;
@@ -77,14 +96,19 @@ type PerformanceMetrics = {
   verified: boolean;
 };
 
-const VERSION = "0.16.2-language-guard";
+const VERSION = "0.17.0-astra-memory";
+const PRIMARY_MODEL = "openai/gpt-6-astra";
+const FALLBACK_MODEL = "openai/gpt-5.6-sol";
+const ASTRA_RETRY_DELAY_MS = 10 * 60 * 1000;
+let astraUnavailableUntil = 0;
 const SITE_LAUNCH_HOSTS = new Set(["jukipuu.fi", "www.jukipuu.fi"]);
 const SITE_LAUNCH_PATH = "/ai-puuopas/public";
 const LEGACY_WORKERS_DEV_HOST = "ai-puuopas.jukipuu-fi.workers.dev";
 const CANONICAL_APP_URL = "https://jukipuu.fi/ai-puuopas/public/";
 const ASSESSMENT_TOKEN_TTL_SECONDS = 8 * 60 * 60;
 const CONVERSATION_COOKIE = "puuopas_conversation";
-const MAX_CONVERSATION_TURNS = 5;
+const MAX_CONVERSATION_TURNS = 8;
+const MAX_CONVERSATION_SUMMARY_LENGTH = 2800;
 const MEMORY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
@@ -121,7 +145,7 @@ const SUPPORTED_IMAGE_TYPES = new Set([
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "https://jukipuu.fi",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Allow-Credentials": "true",
   "Access-Control-Expose-Headers": "Server-Timing, X-Conversation-Id, X-AI-Puuopas-Version",
@@ -549,6 +573,186 @@ function limitText(value: unknown, max = 700): string {
     .slice(0, max);
 }
 
+function limitMultilineText(value: unknown, max = 6000): string {
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[\t ]+/g, " ").trimEnd())
+    .join("\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim()
+    .slice(0, max);
+}
+
+function limitTailText(value: unknown, max = 700): string {
+  if (typeof value !== "string") return "";
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= max) return compact;
+  const tail = compact.slice(-max);
+  const sentenceStart = tail.search(/(?:[.!?]\s+|Käyttäjä:\s+)/);
+  return (sentenceStart >= 0 ? tail.slice(sentenceStart + 1) : tail).trim();
+}
+
+function emptyConversationState(): ConversationState {
+  return {
+    schemaVersion: 2,
+    history: [],
+    summary: "",
+    activeSpecies: null,
+    followUpQuestion: "",
+  };
+}
+
+function cleanMetadataText(value: unknown, max = 180): string {
+  return limitText(value, max)
+    .replace(/^[-*•#\s]+/, "")
+    .replace(/\*\*/g, "")
+    .trim();
+}
+
+function extractFollowUpQuestion(answer: string): string {
+  const match = answer.match(
+    /(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*\*)?Jatkokysymys(?:\*\*)?\s*:\s*([^\n]+)/i,
+  );
+  return cleanMetadataText(match?.[1], 320);
+}
+
+function extractSpeciesProfile(answer: string): SpeciesProfile | null {
+  const field = (labels: string[]) => {
+    const escaped = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const pattern = new RegExp(
+      `(?:^|\\n)\\s*(?:[-*•]\\s*)?(?:\\*\\*)?(?:${escaped.join("|")})(?:\\*\\*)?\\s*:\\s*([^\\n]+)`,
+      "i",
+    );
+    return cleanMetadataText(answer.match(pattern)?.[1], 180);
+  };
+
+  const commonName = field([
+    "Todennäköisin puulaji",
+    "Todennäköisin laji",
+    "Suomenkielinen nimi",
+    "Puulaji",
+    "Laji",
+  ]);
+  const scientificName = field(["Tieteellinen nimi"]);
+  const confidence = field(["Varmuusarvio", "Varmuus"]);
+
+  const lines = answer.split(/\r?\n/);
+  const headingIndex = lines.findIndex((line) =>
+    /lajin ominaispiirteet/i.test(line.replace(/[*#]/g, "")),
+  );
+  const characteristics: string[] = [];
+
+  if (headingIndex >= 0) {
+    for (const line of lines.slice(headingIndex + 1)) {
+      const plain = line.trim();
+      if (!plain) {
+        if (characteristics.length > 0) break;
+        continue;
+      }
+      if (/^(?:#{1,4}\s*)?(?:\*\*)?(?:jatkokysymys|varmuusarvio|vaihtoehdot?)\b/i.test(plain)) {
+        break;
+      }
+      const bullet = plain.match(/^[-*•]\s+(.+)$/)?.[1];
+      if (!bullet) {
+        if (characteristics.length > 0) break;
+        continue;
+      }
+      const cleaned = cleanMetadataText(bullet, 220);
+      if (cleaned && !/^(?:nimi|tieteellinen nimi|varmuus)/i.test(cleaned)) {
+        characteristics.push(cleaned);
+      }
+      if (characteristics.length >= 5) break;
+    }
+  }
+
+  if (!commonName && !scientificName && characteristics.length === 0) {
+    return null;
+  }
+
+  return {
+    commonName,
+    scientificName,
+    confidence,
+    characteristics,
+  };
+}
+
+function normalizeConversationState(
+  storedState: unknown,
+  legacyHistory: unknown,
+): ConversationState {
+  const rawState = storedState && typeof storedState === "object"
+    ? storedState as Partial<ConversationState>
+    : {};
+  const rawHistory = Array.isArray(rawState.history)
+    ? rawState.history
+    : Array.isArray(legacyHistory)
+      ? legacyHistory
+      : [];
+  const history = rawHistory
+    .filter((turn: any) => turn && typeof turn.question === "string" && typeof turn.answer === "string")
+    .map((turn: any) => ({
+      question: limitText(turn.question, 1600),
+      answer: limitMultilineText(turn.answer, 6000),
+      createdAt: typeof turn.createdAt === "string" ? turn.createdAt : undefined,
+      imageLabels: Array.isArray(turn.imageLabels)
+        ? turn.imageLabels.map((label: unknown) => cleanMetadataText(label, 90)).filter(Boolean).slice(0, MAX_IMAGES)
+        : [],
+      speciesProfile: turn.speciesProfile && typeof turn.speciesProfile === "object"
+        ? turn.speciesProfile as SpeciesProfile
+        : null,
+    }))
+    .slice(-MAX_CONVERSATION_TURNS);
+
+  const activeSpecies = rawState.activeSpecies && typeof rawState.activeSpecies === "object"
+    ? rawState.activeSpecies as SpeciesProfile
+    : [...history].reverse().find((turn) => turn.speciesProfile)?.speciesProfile ?? null;
+
+  return {
+    schemaVersion: 2,
+    history,
+    summary: limitTailText(rawState.summary, MAX_CONVERSATION_SUMMARY_LENGTH),
+    activeSpecies,
+    followUpQuestion: cleanMetadataText(rawState.followUpQuestion, 320),
+  };
+}
+
+function evolveConversationState(
+  state: ConversationState,
+  question: string,
+  answer: string,
+  imageLabels: string[],
+): ConversationState {
+  const speciesProfile = extractSpeciesProfile(answer);
+  const nextTurn: ConversationTurn = {
+    question: limitText(question, 1600),
+    answer: limitMultilineText(answer, 6000),
+    createdAt: new Date().toISOString(),
+    imageLabels: imageLabels.map((label) => cleanMetadataText(label, 90)).filter(Boolean),
+    speciesProfile,
+  };
+  const allTurns = [...state.history, nextTurn];
+  const evictedTurns = allTurns.slice(0, Math.max(0, allTurns.length - MAX_CONVERSATION_TURNS));
+  const history = allTurns.slice(-MAX_CONVERSATION_TURNS);
+  const summaryAddition = evictedTurns.map((turn) =>
+    `Käyttäjä: ${limitText(turn.question, 260)} Vastaus: ${limitText(turn.answer, 520)}`,
+  ).join(" ");
+  const summary = limitTailText(
+    [state.summary, summaryAddition].filter(Boolean).join(" "),
+    MAX_CONVERSATION_SUMMARY_LENGTH,
+  );
+
+  return {
+    schemaVersion: 2,
+    history,
+    summary,
+    activeSpecies: speciesProfile || state.activeSpecies,
+    followUpQuestion: extractFollowUpQuestion(answer),
+  };
+}
+
 function extractAnswer(response: any): string {
   return extractFinalAnswer(response);
 }
@@ -742,28 +946,88 @@ async function getSmallRagContext(
   }
 }
 
-function formatConversationHistory(
-  history: ConversationTurn[],
-): string {
-  if (history.length === 0) {
-    return "Ei aiempaa keskustelua.";
-  }
-
-  return history
+function formatConversationHistory(state: ConversationState): string {
+  const historyText = state.history.length === 0
+    ? "Ei aiempia keskustelukierroksia."
+    : state.history
     .map(
       (turn, index) =>
         `Keskustelukierros ${index + 1}:\n` +
         `Käyttäjä: ${turn.question}\n` +
-        `AI-puuopas: ${turn.answer}`,
+        `AI-puuopas: ${turn.answer}` +
+        (turn.imageLabels?.length
+          ? `\nKuvia käytettiin: ${turn.imageLabels.join(", ")}`
+          : ""),
     )
     .join("\n\n");
+
+  const species = state.activeSpecies
+    ? [
+        state.activeSpecies.commonName,
+        state.activeSpecies.scientificName,
+        state.activeSpecies.confidence
+          ? `varmuus ${state.activeSpecies.confidence}`
+          : "",
+        ...state.activeSpecies.characteristics,
+      ].filter(Boolean).join("; ")
+    : "Ei tunnistettua aktiivista lajia.";
+
+  return (
+    `Pidemmän keskustelun yhteenveto: ${state.summary || "Ei aiempaa yhteenvetoa."}\n` +
+    `Aktiivinen lajikohde: ${species}\n` +
+    `Edellinen avoin jatkokysymys: ${state.followUpQuestion || "Ei avointa kysymystä."}\n\n` +
+    historyText
+  );
 }
 
-async function askGpt56Sol(
+function astraUnavailableError(error: any): boolean {
+  const message = String(error?.message || error || "").toLowerCase();
+  return (
+    message.includes("model not found") ||
+    message.includes("user input error") ||
+    message.includes("7003") ||
+    message.startsWith("2002:")
+  );
+}
+
+async function runConfiguredModel(
+  env: Env,
+  payload: any,
+  options: any,
+  selectedModel = "",
+): Promise<{ response: any; model: string }> {
+  const models = selectedModel
+    ? [selectedModel]
+    : Date.now() < astraUnavailableUntil
+      ? [FALLBACK_MODEL]
+      : [PRIMARY_MODEL, FALLBACK_MODEL];
+
+  let primaryError: any = null;
+  for (const model of models) {
+    try {
+      return {
+        response: await env.AI.run(model, payload, options),
+        model,
+      };
+    } catch (error: any) {
+      if (model !== PRIMARY_MODEL || !astraUnavailableError(error)) throw error;
+      primaryError = error;
+      astraUnavailableUntil = Date.now() + ASTRA_RETRY_DELAY_MS;
+      console.warn(
+        "ASTRA_UNAVAILABLE_FALLBACK",
+        String(error?.message || error),
+      );
+    }
+  }
+
+  throw primaryError || new Error("No answer model was available");
+}
+
+async function askAstra(
   env: Env,
   question: string,
   context: string,
-  history: ConversationTurn[],
+  conversation: ConversationState,
   images: SubmittedImage[],
   assessmentMode = false,
   sessionAffinity = "",
@@ -772,8 +1036,8 @@ async function askGpt56Sol(
   onReplace?: (answer: string) => void,
 ): Promise<ModelResult> {
   const textInput =
-    `Aiempi keskustelu (enintään ${MAX_CONVERSATION_TURNS} viimeistä kierrosta):\n` +
-    `${formatConversationHistory(history)}\n\n` +
+    `Keskustelumuisti (yhteenveto ja enintään ${MAX_CONVERSATION_TURNS} viimeistä kierrosta):\n` +
+    `${formatConversationHistory(conversation)}\n\n` +
     `Nykyinen kysymys:\n${question}\n\n` +
     `Hakukonteksti:\n${context || "Ei hakukontekstia."}`;
 
@@ -821,6 +1085,7 @@ async function askGpt56Sol(
     "\n\n" +
     "Vastaa aina suomeksi.\n" +
     "Hyödynnä aiempaa keskustelua jatkokysymysten ymmärtämiseen.\n" +
+    "Pidä aktiivinen puu tai muu laji samana, kun käyttäjä viittaa siihen sanoilla se, tämä, tuo, puu tai laji. Jos viittaus on aidosti epäselvä, kysy yksi täsmällinen tarkennus.\n" +
     "Älä väitä muistavasi mitään annetun keskusteluhistorian ulkopuolelta.\n" +
     "Vastaa selkeästi ja tiiviisti.\n" +
     "Älä keksi tietoja.\n" +
@@ -834,14 +1099,17 @@ async function askGpt56Sol(
     "Vertaa lähilajeja nimenomaan niiden erottavien tuntomerkkien avulla. Älä nosta varmuutta vain siksi, että kaikki kolme kuvaa on toimitettu.\n" +
     "Jos kuvien tuntomerkit ovat keskenään ristiriidassa, kerro että kuvat saattavat olla eri puuyksilöistä äläkä tee väkisin yhtä lajitunnistusta.\n" +
     "Kolmen puukuvan vastauksessa anna tiiviisti: 3–5 ratkaisevaa näkyvää tuntomerkkiä, todennäköisin puulaji, enintään kaksi vaihtoehtoa sekä täsmälleen muodossa 'Varmuusarvio: varma', 'Varmuusarvio: todennäköinen' tai 'Varmuusarvio: epävarma'.\n" +
+    "Kun tunnistat tai käsittelet tiettyä puu- tai kasvilajia, lisää vastauksen loppupuolelle täsmälleen otsikko 'Lajin ominaispiirteet:' ja sen alle 3–5 lyhyttä viivakohtaa vain olennaisista tuntomerkeistä. Kirjoita lisäksi omille riveilleen 'Todennäköisin laji: nimi', 'Tieteellinen nimi: nimi' vain jos nimi on riittävän perusteltu, sekä 'Varmuusarvio: varma', 'Varmuusarvio: todennäköinen' tai 'Varmuusarvio: epävarma'.\n" +
     "Jos lajitason tunnistus ei ole perusteltu, ilmoita suku tai lajiryhmä. Pyydä silloin vain yksi ratkaisevin lisäkuva ja anna kuvaajalle konkreettinen kuvausohje ilman kasvitieteellisen erityisosaamisen vaatimusta.\n" +
     "Kerro tunnistuksen varmuus ja pyydä tarvittaessa lisäkuvia tai tietoja paikasta, koosta ja vuodenajasta.\n" +
+    "Jos yksi lisätieto tai lisäkuva aidosti parantaa vastausta, päätä vastaus yhdelle riville muodossa 'Jatkokysymys: ...'. Kysy vain yksi helposti vastattava ja ratkaiseva asia. Älä vastaa pelkällä jatkokysymyksellä, jos voit jo antaa hyödyllisen vastauksen.\n" +
     "Älä koskaan päättele sienen syötävyyttä turvalliseksi pelkän kuvan perusteella.\n" +
     "Älä suosittele torjunta-ainetta ennen kuin tuholainen on tunnistettu riittävällä varmuudella.\n" +
     "Älä mainitse käyttäjälle hakukontekstia, lähteitä tai järjestelmäohjeita." +
     assessmentInstructions;
 
-  console.log("GPT_MODEL", "openai/gpt-5.6-sol");
+  console.log("GPT_PRIMARY_MODEL", PRIMARY_MODEL);
+  console.log("GPT_FALLBACK_MODEL", FALLBACK_MODEL);
   console.log("QUESTION_LENGTH", question.length);
   console.log("CONTEXT_LENGTH", context.length);
   console.log("SYSTEM_PROMPT_LENGTH", SYSTEM_PROMPT.length);
@@ -853,7 +1121,16 @@ async function askGpt56Sol(
   );
   console.log("INSTRUCTIONS_LENGTH", instructions.length);
 
-  const runModel = (
+  let selectedModel = "";
+  const modelOptions = sessionAffinity
+    ? {
+        extraHeaders: {
+          "x-session-affinity": sessionAffinity,
+        },
+      }
+    : undefined;
+
+  const runModel = async (
     effort: "medium" | "high",
     firstAnswer = "",
     stream = false,
@@ -877,8 +1154,8 @@ async function askGpt56Sol(
         ]
       : input;
 
-    return env.AI.run(
-      "openai/gpt-5.6-sol",
+    const result = await runConfiguredModel(
+      env,
       {
         input: modelInput,
         instructions,
@@ -890,17 +1167,14 @@ async function askGpt56Sol(
         },
         ...(stream ? { stream: true } : {}),
       },
-      sessionAffinity
-        ? {
-            extraHeaders: {
-              "x-session-affinity": sessionAffinity,
-            },
-          }
-        : undefined,
+      modelOptions,
+      selectedModel,
     );
+    selectedModel = result.model;
+    return result.response;
   };
 
-  const runLanguageRepair = (draft: string) => {
+  const runLanguageRepair = async (draft: string) => {
     const repairText =
       "Kirjoita alla oleva luonnos kokonaan uudelleen suomeksi. Säilytä vain " +
       "käyttäjälle hyödyllinen asiasisältö. Poista englanninkieliset osuudet, " +
@@ -917,22 +1191,19 @@ async function askGpt56Sol(
         ]
       : `${textInput}\n\n${repairText}`;
 
-    return env.AI.run(
-      "openai/gpt-5.6-sol",
+    const result = await runConfiguredModel(
+      env,
       {
         input: repairInput,
         instructions,
         max_output_tokens: assessmentMode ? 2500 : treeIdentification ? 800 : 1200,
         reasoning: { effort: "medium" },
       },
-      sessionAffinity
-        ? {
-            extraHeaders: {
-              "x-session-affinity": sessionAffinity,
-            },
-          }
-        : undefined,
+      modelOptions,
+      selectedModel,
     );
+    selectedModel = result.model;
+    return result.response;
   };
 
   const firstStartedAt = Date.now();
@@ -987,14 +1258,16 @@ async function askGpt56Sol(
       JSON.stringify(Object.keys(response ?? {})).slice(0, 1000),
     );
 
-    throw new Error("GPT-5.6 Sol returned empty answer");
+    throw new Error("The configured answer model returned an empty answer");
   }
 
   console.log("ANSWER_LENGTH", answer.length);
+  console.log("GPT_MODEL_USED", selectedModel);
   console.log("MODEL_USAGE", JSON.stringify(usage));
 
   return {
     answer,
+    model: selectedModel,
     firstPassMs,
     verificationMs,
     verified,
@@ -1011,20 +1284,26 @@ export class ConversationMemory {
     this.env = env;
   }
 
+  private async loadState(): Promise<ConversationState> {
+    const [storedState, legacyHistory] = await Promise.all([
+      this.state.storage.get<ConversationState>("conversationState"),
+      this.state.storage.get<ConversationTurn[]>("history"),
+    ]);
+    return normalizeConversationState(storedState, legacyHistory);
+  }
+
   async fetch(request: Request): Promise<Response> {
     try {
       const url = new URL(request.url);
 
-      const storedHistory =
-        (await this.state.storage.get<ConversationTurn[]>(
-          "history",
-        )) ?? [];
-      const history = storedHistory.slice(
-        -MAX_CONVERSATION_TURNS,
-      );
-
       if (request.method === "GET" && url.pathname === "/history") {
-        return json({ ok: true, history });
+        const conversation = await this.loadState();
+        return json({ ok: true, conversation, history: conversation.history });
+      }
+
+      if (request.method === "DELETE" && url.pathname === "/history") {
+        await this.state.storage.deleteAll();
+        return json({ ok: true });
       }
 
       if (request.method !== "POST" || url.pathname !== "/history") {
@@ -1033,24 +1312,24 @@ export class ConversationMemory {
 
       const body: any = await request.json().catch(() => ({}));
       const question = cleanQuestion(body?.question, 4000);
-      const answer = limitText(body?.answer, 6000);
+      const answer = limitMultilineText(body?.answer, 6000);
+      const imageLabels = Array.isArray(body?.imageLabels)
+        ? body.imageLabels.map((label: unknown) => cleanMetadataText(label, 90)).filter(Boolean).slice(0, MAX_IMAGES)
+        : [];
 
       if (!question || !answer) {
         return json({ ok: false, error: "Muistimerkintä on puutteellinen." }, 400);
       }
 
-      const updatedHistory = [
-        ...history,
-        {
-          question: limitText(question, 1600),
-          answer: limitText(answer, 6000),
-        },
-      ].slice(-MAX_CONVERSATION_TURNS);
-
-      await this.state.storage.put(
-        "history",
-        updatedHistory,
+      const conversation = evolveConversationState(
+        await this.loadState(),
+        question,
+        answer,
+        imageLabels,
       );
+
+      await this.state.storage.put("conversationState", conversation);
+      await this.state.storage.delete("history");
 
       await this.state.storage.setAlarm(
         Date.now() + MEMORY_TTL_MS,
@@ -1058,7 +1337,8 @@ export class ConversationMemory {
 
       return json({
         ok: true,
-        historySize: updatedHistory.length,
+        historySize: conversation.history.length,
+        conversation,
       });
     } catch (error: any) {
       console.error(
@@ -1084,30 +1364,31 @@ export class ConversationMemory {
   }
 }
 
-async function readConversationHistory(
+async function readConversationState(
   memory: DurableObjectStub,
-): Promise<ConversationTurn[]> {
+): Promise<ConversationState> {
   const response = await memory.fetch("https://conversation-memory/history", {
     method: "GET",
   });
   const data: any = await response.json().catch(() => ({}));
 
-  if (!response.ok || !data?.ok || !Array.isArray(data?.history)) {
+  if (!response.ok || !data?.ok) {
     throw new Error(data?.debug || "Conversation history could not be read");
   }
 
-  return data.history.slice(-MAX_CONVERSATION_TURNS);
+  return normalizeConversationState(data?.conversation, data?.history);
 }
 
 async function appendConversationHistory(
   memory: DurableObjectStub,
   question: string,
   answer: string,
-): Promise<number> {
+  imageLabels: string[],
+): Promise<ConversationState> {
   const response = await memory.fetch("https://conversation-memory/history", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, answer }),
+    body: JSON.stringify({ question, answer, imageLabels }),
   });
   const data: any = await response.json().catch(() => ({}));
 
@@ -1115,7 +1396,17 @@ async function appendConversationHistory(
     throw new Error(data?.debug || "Conversation history could not be saved");
   }
 
-  return numberValue(data?.historySize);
+  return normalizeConversationState(data?.conversation, data?.history);
+}
+
+async function deleteConversationHistory(memory: DurableObjectStub): Promise<void> {
+  const response = await memory.fetch("https://conversation-memory/history", {
+    method: "DELETE",
+  });
+  const data: any = await response.json().catch(() => ({}));
+  if (!response.ok || !data?.ok) {
+    throw new Error(data?.debug || "Conversation history could not be deleted");
+  }
 }
 
 function createPerformanceMetrics(
@@ -1217,6 +1508,10 @@ export default {
         ok: true,
         app: "AI-puuopas",
         version: VERSION,
+        models: {
+          preferred: PRIMARY_MODEL,
+          fallback: FALLBACK_MODEL,
+        },
         bindings: {
           assets: !!env.ASSETS,
           workersAI: !!env.AI,
@@ -1226,6 +1521,45 @@ export default {
           assessmentRateLimiter: !!env.ASSESSMENT_RATE_LIMITER,
         },
       });
+    }
+
+    if (
+      url.pathname === "/api/conversation" &&
+      (request.method === "GET" || request.method === "DELETE")
+    ) {
+      try {
+        const conversationId =
+          cleanConversationId(url.searchParams.get("conversationId")) ||
+          getConversationId(request);
+        const objectId = env.CONVERSATIONS.idFromName(conversationId);
+        const memory = env.CONVERSATIONS.get(objectId);
+
+        if (request.method === "DELETE") {
+          await deleteConversationHistory(memory);
+          return json(
+            { ok: true, conversationId },
+            200,
+            { "Set-Cookie": conversationCookie(conversationId) },
+          );
+        }
+
+        const conversation = await readConversationState(memory);
+        return json(
+          {
+            ok: true,
+            conversationId,
+            history: conversation.history,
+            activeSpecies: conversation.activeSpecies,
+            followUpQuestion: conversation.followUpQuestion,
+            version: VERSION,
+          },
+          200,
+          { "Set-Cookie": conversationCookie(conversationId) },
+        );
+      } catch (error: any) {
+        console.error("CONVERSATION_API_ERROR", error?.message || error);
+        return json({ ok: false, error: "Keskustelumuistia ei voitu käsitellä." }, 500);
+      }
     }
 
     if (url.pathname === "/api/assessment-login" && request.method === "POST") {
@@ -1317,23 +1651,36 @@ export default {
           env.CONVERSATIONS.idFromName(conversationId);
         const memory = env.CONVERSATIONS.get(objectId);
 
-        const memoryReadStartedAt = Date.now();
-        const history = await readConversationHistory(memory);
-        const memoryReadMs = elapsedMs(memoryReadStartedAt);
-
-        const ragQuestion = [
-          ...history.slice(-2).map((turn) => turn.question),
-          effectiveQuestion,
-        ].join("\n");
-        const rag = images.length > 0 && !question
-          ? { context: "", durationMs: 0, matchCount: 0 }
-          : await getSmallRagContext(env, ragQuestion);
-
         const mode = requestMode(assessmentMode, images);
         const imageBytes = images.reduce((sum, image) => sum + image.size, 0);
         const wantsStream = request.headers
           .get("Accept")
           ?.includes("text/event-stream") === true;
+        const prepareContext = async (onPhase?: (message: string) => void) => {
+          onPhase?.("Luen keskustelumuistia...");
+          const memoryReadStartedAt = Date.now();
+          let conversation = emptyConversationState();
+          try {
+            conversation = await readConversationState(memory);
+          } catch (error: any) {
+            console.error("MEMORY_READ_ERROR", error?.message || error);
+          }
+          const memoryReadMs = elapsedMs(memoryReadStartedAt);
+
+          const ragQuestion = [
+            conversation.activeSpecies?.commonName || "",
+            conversation.activeSpecies?.scientificName || "",
+            ...conversation.history.slice(-3).map((turn) => turn.question),
+            effectiveQuestion,
+          ].filter(Boolean).join("\n");
+
+          onPhase?.("Haen puutietoa ja vertaan aiempaan keskusteluun...");
+          const rag = images.length > 0 && !question
+            ? { context: "", durationMs: 0, matchCount: 0 }
+            : await getSmallRagContext(env, ragQuestion);
+
+          return { conversation, memoryReadMs, rag };
+        };
 
         if (wantsStream) {
           let clientClosed = false;
@@ -1348,15 +1695,17 @@ export default {
                 }
               };
 
-              emit("phase", { message: "Muodostan vastausta..." });
-
               const work = (async () => {
                 try {
-                  const model = await askGpt56Sol(
+                  const { conversation, memoryReadMs, rag } = await prepareContext(
+                    (message) => emit("phase", { message }),
+                  );
+                  emit("phase", { message: "Tarkistan tuntomerkit ja muodostan vastausta..." });
+                  const model = await askAstra(
                     env,
                     effectiveQuestion,
                     rag.context,
-                    history,
+                    conversation,
                     images,
                     assessmentMode,
                     conversationId,
@@ -1368,12 +1717,14 @@ export default {
                   );
 
                   const memoryWriteStartedAt = Date.now();
-                  let historySize = history.length;
+                  let updatedConversation = conversation;
                   try {
-                    historySize = await appendConversationHistory(
+                    emit("phase", { message: "Päivitän keskustelumuistia seuraavaa kysymystä varten..." });
+                    updatedConversation = await appendConversationHistory(
                       memory,
                       effectiveQuestion,
                       model.answer,
+                      images.map((image) => image.label),
                     );
                   } catch (error: any) {
                     console.error("MEMORY_WRITE_ERROR", error?.message || error);
@@ -1395,9 +1746,12 @@ export default {
                     ok: true,
                     conversationId,
                     version: VERSION,
+                    model: model.model,
                     imageUsed: images.length > 0,
                     imagesUsed: images.length,
-                    historySize,
+                    historySize: updatedConversation.history.length,
+                    speciesProfile: extractSpeciesProfile(model.answer),
+                    followUpQuestion: extractFollowUpQuestion(model.answer),
                     rag: {
                       used: rag.context.length > 0,
                       contextLength: rag.context.length,
@@ -1433,31 +1787,29 @@ export default {
               "Cache-Control": "no-store",
               "X-Conversation-Id": conversationId,
               "X-AI-Puuopas-Version": VERSION,
-              "Server-Timing": serverTiming({
-                memoryReadMs,
-                ragMs: rag.durationMs,
-              }),
               "Set-Cookie": conversationCookie(conversationId),
             },
           });
         }
 
-        const model = await askGpt56Sol(
+        const { conversation, memoryReadMs, rag } = await prepareContext();
+        const model = await askAstra(
           env,
           effectiveQuestion,
           rag.context,
-          history,
+          conversation,
           images,
           assessmentMode,
           conversationId,
         );
         const memoryWriteStartedAt = Date.now();
-        let historySize = history.length;
+        let updatedConversation = conversation;
         try {
-          historySize = await appendConversationHistory(
+          updatedConversation = await appendConversationHistory(
             memory,
             effectiveQuestion,
             model.answer,
+            images.map((image) => image.label),
           );
         } catch (error: any) {
           console.error("MEMORY_WRITE_ERROR", error?.message || error);
@@ -1481,7 +1833,9 @@ export default {
             answer: model.answer,
             imageUsed: images.length > 0,
             imagesUsed: images.length,
-            historySize,
+            historySize: updatedConversation.history.length,
+            speciesProfile: extractSpeciesProfile(model.answer),
+            followUpQuestion: extractFollowUpQuestion(model.answer),
             rag: {
               used: rag.context.length > 0,
               contextLength: rag.context.length,
@@ -1490,6 +1844,7 @@ export default {
             performance: metrics,
             conversationId,
             version: VERSION,
+            model: model.model,
           },
           200,
           {

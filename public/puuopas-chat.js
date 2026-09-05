@@ -12,6 +12,7 @@
     ? `${location.origin}${SITE_LAUNCH_PATH}`
     : WORKER_ORIGIN;
   const API_URL = `${API_ORIGIN}/api/ask`;
+  const CONVERSATION_URL = `${API_ORIGIN}/api/conversation`;
   const ASSESSMENT_LOGIN_URL = `${API_ORIGIN}/api/assessment-login`;
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
   const MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024;
@@ -45,6 +46,7 @@
   let pendingImage = null;
   let requestInProgress = false;
   let loadingTimer = null;
+  let activeLoading = null;
   const treeImages = [null, null, null];
   const assessmentImages = [null, null, null, null];
   let assessmentAccessToken = "";
@@ -168,6 +170,20 @@
     .puuopas-location-status { color: #53655a; font-size: .88rem; line-height: 1.4; }
     .puuopas-location-status.is-success { color: #245a30; font-weight: 700; }
     .puuopas-location-status.is-error { color: #8b2525; }
+    .puuopas-location-consent {
+      align-items: flex-start; color: #344b39; display: flex; font-size: .92rem;
+      font-weight: 600; gap: 9px; line-height: 1.45;
+    }
+    .puuopas-location-consent input {
+      accent-color: #2f633b; flex: 0 0 auto; height: 18px; margin: 2px 0 0;
+      padding: 0; width: 18px;
+    }
+    .puuopas-location-clear {
+      background: transparent; border: 0; color: #8b2525; cursor: pointer;
+      font: inherit; font-size: .9rem; font-weight: 700; justify-self: start;
+      padding: 4px 0; text-decoration: underline; text-underline-offset: 3px;
+    }
+    .puuopas-location-clear[hidden] { display: none; }
     .puuopas-assessment-photo {
       background: #f7faf7; border: 2px dashed #9bb5a0; border-radius: 12px;
       color: #244b2d; cursor: pointer; display: grid; min-height: 150px;
@@ -229,6 +245,65 @@
     .puuopas-approved-additions { display: none; margin-top: 20px; }
     .puuopas-approved-additions.is-visible { display: block; }
     .puuopas-report-actions { padding: 0 38px 32px; }
+    .puuopas-conversation-header {
+      align-items: center; border-bottom: 1px solid #dfe9e1; display: flex;
+      gap: 14px; justify-content: space-between; margin: -4px 0 20px; padding-bottom: 14px;
+    }
+    .puuopas-conversation-header strong { color: #244b2d; font-size: 1rem; }
+    .puuopas-new-conversation {
+      background: transparent; border: 1px solid #b8cdbd; border-radius: 9px;
+      color: #244b2d; cursor: pointer; font: inherit; font-size: .88rem;
+      font-weight: 700; padding: 8px 11px;
+    }
+    .puuopas-conversation-list { display: grid; gap: 16px; white-space: normal; }
+    .puuopas-message { display: grid; gap: 9px; max-width: min(92%, 780px); }
+    .puuopas-message.is-user { justify-self: end; }
+    .puuopas-message.is-assistant { justify-self: start; width: 100%; }
+    .puuopas-message-label {
+      color: #607064; font-size: .76rem; font-weight: 800; letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .puuopas-message.is-user .puuopas-message-label { text-align: right; }
+    .puuopas-message-body {
+      background: #f3f8f4; border: 1px solid #d2e1d5; border-radius: 16px;
+      line-height: 1.58; padding: 14px 16px; white-space: pre-wrap;
+    }
+    .puuopas-message.is-user .puuopas-message-body {
+      background: #245a30; border-color: #245a30; color: #fff;
+    }
+    .puuopas-message.is-error .puuopas-message-body {
+      background: #fff3f1; border-color: #e4bcb5; color: #7c2520;
+    }
+    .puuopas-response-gallery {
+      display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
+    .puuopas-response-image { margin: 0; }
+    .puuopas-response-image img {
+      aspect-ratio: 4 / 3; border-radius: 11px; display: block; object-fit: cover; width: 100%;
+    }
+    .puuopas-response-image figcaption { color: #53655a; font-size: .78rem; margin-top: 4px; }
+    .puuopas-species-card {
+      background: #fffdf4; border: 1px solid #dccd9b; border-radius: 14px; padding: 14px 16px;
+    }
+    .puuopas-species-card h3 { color: #244b2d; font-size: 1rem; margin: 0 0 4px; }
+    .puuopas-species-scientific { color: #607064; font-style: italic; margin: 0 0 9px; }
+    .puuopas-species-card ul { margin: 7px 0 0; padding-left: 20px; }
+    .puuopas-species-confidence { color: #53655a; font-size: .86rem; margin-top: 9px; }
+    .puuopas-follow-up {
+      background: #eef5ef; border: 1px solid #9fbea5; border-radius: 999px;
+      color: #244b2d; cursor: pointer; font: inherit; font-size: .9rem;
+      font-weight: 700; justify-self: start; padding: 9px 14px; text-align: left;
+    }
+    .puuopas-thought-stream {
+      background: #f7faf7; border: 1px solid #d4e2d6; border-radius: 13px;
+      margin-bottom: 10px; padding: 11px 13px;
+    }
+    .puuopas-thought-stream-title { color: #244b2d; display: block; font-size: .88rem; }
+    .puuopas-thought-steps { color: #53655a; display: grid; font-size: .84rem; gap: 4px; list-style: none; margin: 7px 0 0; padding: 0; }
+    .puuopas-thought-step::before { content: "○"; display: inline-block; margin-right: 7px; }
+    .puuopas-thought-step.is-active { color: #244b2d; font-weight: 700; }
+    .puuopas-thought-step.is-active::before { content: "↻"; }
+    .puuopas-thought-step.is-complete::before { color: #2f633b; content: "✓"; }
     .puuopas-loading {
       align-items: center; display: grid; gap: 12px; grid-template-columns: auto 1fr;
     }
@@ -268,6 +343,109 @@
   `;
   document.head.appendChild(styles);
 
+  answerText.textContent = "";
+  const conversationHeader = document.createElement("div");
+  conversationHeader.className = "puuopas-conversation-header";
+  const conversationTitle = document.createElement("strong");
+  conversationTitle.textContent = "Keskustelu AI-puuoppaan kanssa";
+  const newConversationButton = document.createElement("button");
+  newConversationButton.type = "button";
+  newConversationButton.className = "puuopas-new-conversation";
+  newConversationButton.textContent = "Uusi keskustelu";
+  const conversationList = document.createElement("div");
+  conversationList.className = "puuopas-conversation-list";
+  conversationHeader.append(conversationTitle, newConversationButton);
+  answerText.append(conversationHeader, conversationList);
+
+  function appendConversationMessage(role, text = "", options = {}) {
+    const message = document.createElement("article");
+    message.className = `puuopas-message is-${role}` + (options.error ? " is-error" : "");
+    const label = document.createElement("div");
+    label.className = "puuopas-message-label";
+    label.textContent = role === "user" ? "Sinä" : "AI-puuopas";
+    const body = document.createElement("div");
+    body.className = "puuopas-message-body";
+    body.textContent = text;
+    message.append(label, body);
+    conversationList.appendChild(message);
+    answerPanel.style.display = "block";
+    return { message, body };
+  }
+
+  function renderResponseImages(message, images) {
+    const visibleImages = (images || []).filter((image) => image?.dataUrl);
+    if (visibleImages.length === 0) return;
+    const gallery = document.createElement("div");
+    gallery.className = "puuopas-response-gallery";
+    visibleImages.forEach((image, index) => {
+      const figure = document.createElement("figure");
+      figure.className = "puuopas-response-image";
+      const previewImage = document.createElement("img");
+      previewImage.src = image.dataUrl;
+      previewImage.alt = image.label || `Vastauksessa käytetty kuva ${index + 1}`;
+      const caption = document.createElement("figcaption");
+      caption.textContent = image.label || `Vastauksessa käytetty kuva ${index + 1}`;
+      figure.append(previewImage, caption);
+      gallery.appendChild(figure);
+    });
+    message.appendChild(gallery);
+  }
+
+  function renderSpeciesCard(message, profile) {
+    if (!profile || (!profile.commonName && !profile.scientificName && !profile.characteristics?.length)) return;
+    const card = document.createElement("section");
+    card.className = "puuopas-species-card";
+    const title = document.createElement("h3");
+    title.textContent = profile.commonName
+      ? `🌿 ${profile.commonName}`
+      : "🌿 Lajin ominaispiirteet";
+    card.appendChild(title);
+    if (profile.scientificName) {
+      const scientific = document.createElement("p");
+      scientific.className = "puuopas-species-scientific";
+      scientific.textContent = profile.scientificName;
+      card.appendChild(scientific);
+    }
+    if (Array.isArray(profile.characteristics) && profile.characteristics.length > 0) {
+      const list = document.createElement("ul");
+      profile.characteristics.slice(0, 5).forEach((characteristic) => {
+        const item = document.createElement("li");
+        item.textContent = characteristic;
+        list.appendChild(item);
+      });
+      card.appendChild(list);
+    }
+    if (profile.confidence) {
+      const confidence = document.createElement("div");
+      confidence.className = "puuopas-species-confidence";
+      confidence.textContent = `Varmuusarvio: ${profile.confidence}`;
+      card.appendChild(confidence);
+    }
+    message.appendChild(card);
+  }
+
+  function renderFollowUp(message, question) {
+    if (!question) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "puuopas-follow-up";
+    button.textContent = `Jatka: ${question}`;
+    button.addEventListener("click", () => {
+      input.value = question;
+      input.focus();
+      input.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    message.appendChild(button);
+  }
+
+  function answerForDisplay(answer, followUpQuestion) {
+    if (!followUpQuestion) return answer || "";
+    return String(answer || "")
+      .replace(/(?:^|\n)\s*(?:#{1,4}\s*)?(?:\*\*)?Jatkokysymys(?:\*\*)?\s*:\s*[^\n]+/i, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
   const fileInput = document.createElement("input");
   fileInput.type = "file";
   fileInput.accept = "image/jpeg,image/png,image/webp";
@@ -301,6 +479,7 @@
       clearInterval(loadingTimer);
       loadingTimer = null;
     }
+    activeLoading = null;
   }
 
   function formatElapsed(seconds) {
@@ -312,45 +491,75 @@
   function startLoading(
     initialPhase,
     loadingNote = "Tietojen haku ja tarkistus voi kestää noin 1–1,5 minuuttia.",
+    targetMessage = null,
   ) {
     stopLoading();
     answerPanel.style.display = "block";
-    answerText.innerHTML =
-      '<div class="puuopas-loading" role="status" aria-live="polite">' +
-        '<span class="puuopas-loading-spinner" aria-hidden="true">↻</span>' +
-        '<div><strong class="puuopas-loading-phase"></strong>' +
-          '<div class="puuopas-loading-time"></div>' +
-          `<div class="puuopas-loading-note">${loadingNote}</div>` +
-        '</div>' +
-      '</div>';
+    const target = targetMessage || appendConversationMessage("assistant").message;
+    const thoughtStream = document.createElement("div");
+    thoughtStream.className = "puuopas-thought-stream";
+    thoughtStream.setAttribute("role", "status");
+    thoughtStream.setAttribute("aria-live", "polite");
+    const title = document.createElement("strong");
+    title.className = "puuopas-thought-stream-title";
+    title.textContent = "Ajatusvirta";
+    const steps = document.createElement("ol");
+    steps.className = "puuopas-thought-steps";
+    const elapsed = document.createElement("div");
+    elapsed.className = "puuopas-loading-time";
+    const note = document.createElement("div");
+    note.className = "puuopas-loading-note";
+    note.textContent = loadingNote;
+    thoughtStream.append(title, steps, elapsed, note);
+    target.insertBefore(thoughtStream, target.querySelector(".puuopas-message-body"));
 
     const startedAt = Date.now();
-    const phase = answerText.querySelector(".puuopas-loading-phase");
-    const elapsed = answerText.querySelector(".puuopas-loading-time");
+    let activeStep = null;
+
+    function updatePhase(message) {
+      if (!message || activeStep?.textContent === message) return;
+      if (activeStep) {
+        activeStep.classList.remove("is-active");
+        activeStep.classList.add("is-complete");
+      }
+      activeStep = document.createElement("li");
+      activeStep.className = "puuopas-thought-step is-active";
+      activeStep.textContent = message;
+      steps.appendChild(activeStep);
+    }
 
     function updateLoading() {
       const seconds = Math.floor((Date.now() - startedAt) / 1000);
-      if (seconds < 15) {
-        phase.textContent = initialPhase;
-      } else if (seconds < 45) {
-        phase.textContent = "Tarkistan tuntomerkkejä ja tietoja...";
-      } else if (seconds < 75) {
-        phase.textContent = "Varmistan vastausta...";
-      } else {
-        phase.textContent = "Tarkistus jatkuu – järjestelmä työskentelee edelleen...";
-      }
       elapsed.textContent = `⏱ Kulunut aika ${formatElapsed(seconds)}`;
     }
 
+    updatePhase(initialPhase);
     updateLoading();
     loadingTimer = setInterval(updateLoading, 1000);
-    return stopLoading;
+    const finish = () => {
+      if (activeStep) {
+        activeStep.classList.remove("is-active");
+        activeStep.classList.add("is-complete");
+      }
+      const seconds = Math.floor((Date.now() - startedAt) / 1000);
+      elapsed.textContent = `✓ Valmis ${formatElapsed(seconds)}`;
+      if (loadingTimer) {
+        clearInterval(loadingTimer);
+        loadingTimer = null;
+      }
+      if (activeLoading === finish) activeLoading = null;
+    };
+    finish.updatePhase = updatePhase;
+    finish.message = target;
+    activeLoading = finish;
+    return finish;
   }
 
   function showMessage(message) {
-    stopLoading();
-    answerPanel.style.display = "block";
-    answerText.textContent = message;
+    if (activeLoading) activeLoading();
+    return appendConversationMessage("assistant", message, {
+      error: String(message).startsWith("❌"),
+    }).message;
   }
 
   function clearImage() {
@@ -411,11 +620,11 @@
 
   async function useImage(file) {
     try {
-      showMessage("📷 Valmistelen kuvaa...");
+      preview.querySelector("span").textContent = "Valmistelen kuvaa...";
       pendingImage = await prepareImage(file);
       preview.querySelector("img").src = pendingImage.dataUrl;
+      preview.querySelector("span").textContent = "Kuva on mukana tunnistusta varten.";
       preview.style.display = "flex";
-      answerPanel.style.display = "none";
       input.focus();
     } catch (error) {
       clearImage();
@@ -435,6 +644,66 @@
     }
     return id;
   }
+
+  async function restoreConversation() {
+    try {
+      const conversationId = getConversationId();
+      const response = await fetch(
+        `${CONVERSATION_URL}?conversationId=${encodeURIComponent(conversationId)}`,
+        { credentials: "include" },
+      );
+      if (!response.ok) return;
+      const data = await response.json();
+      if (data.conversationId) localStorage.setItem(STORAGE_KEY, data.conversationId);
+      const history = Array.isArray(data.history) ? data.history : [];
+      if (history.length === 0 || conversationList.children.length > 0) return;
+
+      history.forEach((turn, index) => {
+        appendConversationMessage("user", turn.question || "Aiempi kysymys");
+        const assistant = appendConversationMessage(
+          "assistant",
+          answerForDisplay(turn.answer, index === history.length - 1 ? data.followUpQuestion : ""),
+        );
+        renderSpeciesCard(assistant.message, turn.speciesProfile);
+        if (Array.isArray(turn.imageLabels) && turn.imageLabels.length > 0) {
+          const note = document.createElement("div");
+          note.className = "puuopas-loading-note";
+          note.textContent = "Kuvat käsiteltiin vastauksen yhteydessä, mutta niitä ei tallennettu keskustelumuistiin.";
+          assistant.message.appendChild(note);
+        }
+        if (index === history.length - 1) {
+          renderFollowUp(assistant.message, data.followUpQuestion);
+        }
+      });
+    } catch (error) {
+      console.warn("Keskusteluhistoriaa ei voitu palauttaa", error);
+    }
+  }
+
+  newConversationButton.addEventListener("click", async () => {
+    if (requestInProgress) return;
+    const confirmed = window.confirm("Aloitetaanko uusi keskustelu? Nykyinen 24 tunnin keskustelumuisti poistetaan.");
+    if (!confirmed) return;
+    newConversationButton.disabled = true;
+    try {
+      const conversationId = getConversationId();
+      await fetch(
+        `${CONVERSATION_URL}?conversationId=${encodeURIComponent(conversationId)}`,
+        { method: "DELETE", credentials: "include" },
+      );
+      localStorage.removeItem(STORAGE_KEY);
+      conversationList.textContent = "";
+      answerPanel.style.display = "none";
+      input.value = "";
+      clearImage();
+      input.focus();
+    } catch (error) {
+      console.error(error);
+      showMessage("❌ Keskustelua ei voitu tyhjentää juuri nyt.");
+    } finally {
+      newConversationButton.disabled = false;
+    }
+  });
 
   function dataUrlToBlob(dataUrl) {
     const [header, base64 = ""] = dataUrl.split(",", 2);
@@ -486,7 +755,6 @@
 
   async function askApi(payload, options = {}) {
     const useStream = options.stream ?? payload.assessment !== true;
-    const renderDeltas = options.renderDeltas ?? useStream;
     const requestBody = buildAskRequest(payload);
     const headers = {
       Accept: useStream ? "text/event-stream" : "application/json",
@@ -544,28 +812,19 @@
       }
 
       if (event === "phase") {
-        const phase = answerText.querySelector(".puuopas-loading-phase");
-        if (phase && data.message) phase.textContent = data.message;
+        if (data.message) options.onPhase?.(data.message);
         return;
       }
 
       if (event === "delta" && typeof data.delta === "string") {
         answer += data.delta;
-        if (renderDeltas) {
-          stopLoading();
-          answerPanel.style.display = "block";
-          answerText.textContent = answer;
-        }
+        options.onDelta?.(answer, data.delta);
         return;
       }
 
       if (event === "replace" && typeof data.answer === "string") {
         answer = data.answer;
-        if (renderDeltas) {
-          stopLoading();
-          answerPanel.style.display = "block";
-          answerText.textContent = answer;
-        }
+        options.onReplace?.(answer);
         return;
       }
 
@@ -624,22 +883,47 @@
     if ((!question && !pendingImage) || requestInProgress) return;
 
     requestInProgress = true;
+    const submittedImage = pendingImage
+      ? { ...pendingImage, label: "Vastauksessa käytetty kuva" }
+      : null;
+    appendConversationMessage(
+      "user",
+      question || "Tunnista tämä kuva.",
+    );
+    const assistant = appendConversationMessage("assistant");
     const finishLoading = startLoading(
-      pendingImage ? "Tunnistan kuvaa..." : "Haen ja tarkistan tietoja...",
+      pendingImage ? "Valmistelen kuvan analysointia..." : "Valmistelen kysymystä...",
+      "Näet tässä vastauksen todelliset päävaiheet. Mallin sisäistä päättelyä ei näytetä.",
+      assistant.message,
     );
     submitButton.disabled = true;
     input.disabled = true;
     attachButton.disabled = true;
+    input.value = "";
 
     try {
-      const data = await askApi({ question, image: pendingImage });
+      const data = await askApi(
+        { question, image: submittedImage },
+        {
+          onPhase: (message) => finishLoading.updatePhase(message),
+          onDelta: (answer) => { assistant.body.textContent = answer; },
+          onReplace: (answer) => { assistant.body.textContent = answer; },
+        },
+      );
       finishLoading();
-      answerText.textContent = data.answer || "En saanut muodostettua vastausta.";
+      assistant.body.textContent = answerForDisplay(
+        data.answer || "En saanut muodostettua vastausta.",
+        data.followUpQuestion,
+      );
+      renderResponseImages(assistant.message, submittedImage ? [submittedImage] : []);
+      renderSpeciesCard(assistant.message, data.speciesProfile);
+      renderFollowUp(assistant.message, data.followUpQuestion);
       clearImage();
     } catch (error) {
       console.error(error);
       finishLoading();
-      answerText.textContent = "❌ " +
+      assistant.message.classList.add("is-error");
+      assistant.body.textContent = "❌ " +
         (error.message || "AI-puuopas ei saanut vastausta juuri nyt. Kokeile hetken kuluttua uudelleen.");
     } finally {
       finishLoading();
@@ -825,8 +1109,10 @@
             '<div class="puuopas-assessment-field"><label>Tieteellinen nimi<input name="scientificName" placeholder="Esim. Acer platanoides"></label></div>' +
             '<div class="puuopas-assessment-field"><label>Sijainti<input name="location" placeholder="Osoite tai kohteen kuvaus"></label></div>' +
             '<div class="puuopas-assessment-field is-wide"><div class="puuopas-location-box">' +
-              '<button type="button" class="puuopas-location-button">📍 Hae nykyinen sijainti</button>' +
-              '<span class="puuopas-location-status" role="status" aria-live="polite">Sijaintia ei lueta automaattisesti. Puhelin kysyy luvan vasta painikkeesta.</span>' +
+              '<label class="puuopas-location-consent"><input type="checkbox" class="puuopas-location-consent-input"><span>Hyväksyn, että AI‑Puuopas käsittelee laitteen GPS-koordinaatit ja tarkkuustiedon tämän kuntoarvion laatimiseksi. Tieto voi sisältyä keskustelumuistiin enintään 24 tunniksi. Suostumus on vapaaehtoinen.</span></label>' +
+              '<button type="button" class="puuopas-location-button" disabled>📍 Hae nykyinen sijainti</button>' +
+              '<button type="button" class="puuopas-location-clear" hidden>Poista sijainti ja peruuta suostumus</button>' +
+              '<span class="puuopas-location-status" role="status" aria-live="polite">Sijaintia ei lueta automaattisesti. Hyväksy ensin sijaintitiedon käsittely; sen jälkeen selain kysyy oman sijaintiluvan.</span>' +
               '<input type="hidden" name="latitude"><input type="hidden" name="longitude"><input type="hidden" name="locationAccuracy">' +
             '</div></div>' +
           '</div></section>' +
@@ -865,6 +1151,8 @@
     const assessmentSubmit = panel.querySelector(".puuopas-assessment-submit");
     const assessmentStatus = panel.querySelector(".puuopas-assessment-status");
     const locationButton = panel.querySelector(".puuopas-location-button");
+    const locationConsent = panel.querySelector(".puuopas-location-consent-input");
+    const locationClear = panel.querySelector(".puuopas-location-clear");
     const locationStatus = panel.querySelector(".puuopas-location-status");
     panel.querySelector('[name="assessmentDate"]').value = new Date().toISOString().slice(0, 10);
 
@@ -896,8 +1184,49 @@
       }
     });
 
+    function clearLocation(message) {
+      panel.querySelector('[name="latitude"]').value = "";
+      panel.querySelector('[name="longitude"]').value = "";
+      panel.querySelector('[name="locationAccuracy"]').value = "";
+      locationButton.textContent = "📍 Hae nykyinen sijainti";
+      locationButton.disabled = !locationConsent.checked;
+      locationClear.hidden = true;
+      locationStatus.className = "puuopas-location-status";
+      locationStatus.textContent = message;
+    }
+
+    locationConsent.addEventListener("change", () => {
+      if (locationConsent.checked) {
+        locationButton.disabled = false;
+        locationStatus.className = "puuopas-location-status";
+        locationStatus.textContent =
+          "Suostumus annettu. Hae sijainti painikkeesta; selain kysyy vielä oman sijaintiluvan.";
+        return;
+      }
+
+      clearLocation(
+        "Sijaintisuostumus peruutettu ja lomakkeelle luetut GPS-tiedot poistettu.",
+      );
+    });
+
+    locationClear.addEventListener("click", () => {
+      locationConsent.checked = false;
+      clearLocation(
+        "Sijaintisuostumus peruutettu ja lomakkeelle luetut GPS-tiedot poistettu.",
+      );
+      locationConsent.focus();
+    });
+
     locationButton.addEventListener("click", () => {
       locationStatus.className = "puuopas-location-status";
+      if (!locationConsent.checked) {
+        locationStatus.textContent =
+          "Hyväksy sijaintitiedon käsittely ennen GPS-sijainnin hakemista.";
+        locationStatus.classList.add("is-error");
+        locationConsent.focus();
+        return;
+      }
+
       if (!navigator.geolocation) {
         locationStatus.textContent = "Tämä selain ei tue sijainnin lukemista. Kirjoita sijainti kenttään.";
         locationStatus.classList.add("is-error");
@@ -919,6 +1248,7 @@
             "Tonttiraja on aina tarkistettava erikseen.";
           locationStatus.classList.add("is-success");
           locationButton.textContent = "📍 Päivitä sijainti";
+          locationClear.hidden = false;
           locationButton.disabled = false;
         },
         (error) => {
@@ -929,7 +1259,7 @@
           };
           locationStatus.textContent = messages[error.code] || "Sijaintia ei voitu lukea. Kirjoita sijainti kenttään.";
           locationStatus.classList.add("is-error");
-          locationButton.disabled = false;
+          locationButton.disabled = !locationConsent.checked;
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
       );
@@ -1026,7 +1356,12 @@
       requestInProgress = true;
       assessmentSubmit.disabled = true;
       assessmentStatus.textContent = "Laadin kuntoarvion raakaversiota...";
-      const finishLoading = startLoading("Tarkastelen yleiskuvaa ja kohdetietoja...");
+      const assessmentActivity = appendConversationMessage("assistant");
+      const finishLoading = startLoading(
+        "Tarkastelen yleiskuvaa ja kohdetietoja...",
+        "Kuntoarvion raakaversio tarkistetaan ennen näyttämistä.",
+        assessmentActivity.message,
+      );
       try {
         const data = await askApi({
           question: buildAssessmentPrompt(panel),
@@ -1035,12 +1370,14 @@
           assessmentToken: assessmentAccessToken,
         });
         finishLoading();
+        assessmentActivity.message.remove();
         showMessage("🌳 Kuntoarvion raakaversio on valmis alla.");
         renderAssessmentReport(panel, data.answer || "En saanut muodostettua kuntoarvion luonnosta.");
         assessmentStatus.textContent = "Raakaversio valmis";
       } catch (error) {
         console.error(error);
         finishLoading();
+        assessmentActivity.message.remove();
         if (String(error.message || "").includes("salasanaistunto")) {
           assessmentAccessToken = "";
           panel.classList.remove("is-unlocked");
@@ -1177,7 +1514,9 @@
     });
 
     identifyButton.addEventListener("click", async () => {
-      const images = treeImages.filter(Boolean);
+      const images = treeImages
+        .map((image, index) => image ? { ...image, label: TREE_SLOTS[index].title } : null)
+        .filter(Boolean);
       if (images.length !== 3 || requestInProgress) return;
       const totalBytes = images.reduce((sum, image) => sum + dataUrlSize(image.dataUrl), 0);
       if (totalBytes > MAX_TOTAL_IMAGE_BYTES) {
@@ -1188,21 +1527,38 @@
       requestInProgress = true;
       identifyButton.disabled = true;
       status.textContent = "Tunnistan puuta vaiheittain kolmesta kuvasta...";
+      appendConversationMessage("user", "Tunnista tämä puu kolmesta kuvasta.");
+      const assistant = appendConversationMessage("assistant");
       const finishLoading = startLoading(
-        "Rajaukseen käytetään ensin lehteä tai silmua...",
-        "Tunnistus valmistuu yleensä noin 15–30 sekunnissa. Vaikea lähilajitapaus tarkistetaan automaattisesti tarkemmin.",
+        "Valmistelen kolme kuvaa tunnistusta varten...",
+        "Näet tässä tunnistuksen todelliset päävaiheet. Vaikea lähilajitapaus tarkistetaan automaattisesti tarkemmin.",
+        assistant.message,
       );
       try {
-        const data = await askApi({ images });
+        const data = await askApi(
+          { images },
+          {
+            onPhase: (message) => finishLoading.updatePhase(message),
+            onDelta: (answer) => { assistant.body.textContent = answer; },
+            onReplace: (answer) => { assistant.body.textContent = answer; },
+          },
+        );
         finishLoading();
-        answerText.textContent = data.answer || "En saanut muodostettua tunnistusta.";
+        assistant.body.textContent = answerForDisplay(
+          data.answer || "En saanut muodostettua tunnistusta.",
+          data.followUpQuestion,
+        );
+        renderResponseImages(assistant.message, images);
+        renderSpeciesCard(assistant.message, data.speciesProfile);
+        renderFollowUp(assistant.message, data.followUpQuestion);
         status.textContent = "Tunnistus valmis";
         answerPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
       } catch (error) {
         console.error(error);
         finishLoading();
         status.textContent = "Tunnistus epäonnistui";
-        answerText.textContent = "❌ " +
+        assistant.message.classList.add("is-error");
+        assistant.body.textContent = "❌ " +
           (error.message || "AI-puuopas ei saanut vastausta juuri nyt. Kokeile hetken kuluttua uudelleen.");
       } finally {
         finishLoading();
@@ -1214,4 +1570,5 @@
 
   buildTreeIdentifier();
   buildConditionAssessment();
+  restoreConversation();
 })();
